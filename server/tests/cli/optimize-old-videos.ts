@@ -1,4 +1,4 @@
-/* tslint:disable:no-unused-expression */
+/* eslint-disable @typescript-eslint/no-unused-expressions,@typescript-eslint/require-await */
 
 import 'mocha'
 import * as chai from 'chai'
@@ -28,7 +28,9 @@ const expect = chai.expect
 
 describe('Test optimize old videos', function () {
   let servers: ServerInfo[] = []
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   let video1UUID: string
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   let video2UUID: string
 
   before(async function () {
@@ -46,7 +48,7 @@ describe('Test optimize old videos', function () {
       tempFixturePath = await generateHighBitrateVideo()
 
       const bitrate = await getVideoFileBitrate(tempFixturePath)
-      expect(bitrate).to.be.above(getMaxBitrate(VideoResolution.H_1080P, 60, VIDEO_TRANSCODING_FPS))
+      expect(bitrate).to.be.above(getMaxBitrate(VideoResolution.H_1080P, 25, VIDEO_TRANSCODING_FPS))
     }
 
     // Upload two videos for our needs
@@ -102,7 +104,7 @@ describe('Test optimize old videos', function () {
         expect(videosDetails.files).to.have.lengthOf(1)
         const file = videosDetails.files[0]
 
-        expect(file.size).to.be.below(5000000)
+        expect(file.size).to.be.below(8000000)
 
         const path = join(root(), 'test' + servers[0].internalServerNumber, 'videos', video.uuid + '-' + file.resolution.id + '.mp4')
         const bitrate = await getVideoFileBitrate(path)

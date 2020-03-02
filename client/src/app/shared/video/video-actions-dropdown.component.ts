@@ -13,6 +13,8 @@ import { VideoReportComponent } from '@app/shared/video/modals/video-report.comp
 import { VideoBlacklistComponent } from '@app/shared/video/modals/video-blacklist.component'
 import { VideoBlacklistService } from '@app/shared/video-blacklist'
 import { ScreenService } from '@app/shared/misc/screen.service'
+import { VideoCaption } from '@shared/models'
+import { RedundancyService } from '@app/shared/video/redundancy.service'
 
 export type VideoActionsDisplayType = {
   playlist?: boolean
@@ -21,6 +23,7 @@ export type VideoActionsDisplayType = {
   blacklist?: boolean
   delete?: boolean
   report?: boolean
+  duplicate?: boolean
 }
 
 @Component({
@@ -29,14 +32,15 @@ export type VideoActionsDisplayType = {
   styleUrls: [ './video-actions-dropdown.component.scss' ]
 })
 export class VideoActionsDropdownComponent implements OnChanges {
-  @ViewChild('playlistDropdown', { static: false }) playlistDropdown: NgbDropdown
-  @ViewChild('playlistAdd', { static: false }) playlistAdd: VideoAddToPlaylistComponent
+  @ViewChild('playlistDropdown') playlistDropdown: NgbDropdown
+  @ViewChild('playlistAdd') playlistAdd: VideoAddToPlaylistComponent
 
-  @ViewChild('videoDownloadModal', { static: false }) videoDownloadModal: VideoDownloadComponent
-  @ViewChild('videoReportModal', { static: false }) videoReportModal: VideoReportComponent
-  @ViewChild('videoBlacklistModal', { static: false }) videoBlacklistModal: VideoBlacklistComponent
+  @ViewChild('videoDownloadModal') videoDownloadModal: VideoDownloadComponent
+  @ViewChild('videoReportModal') videoReportModal: VideoReportComponent
+  @ViewChild('videoBlacklistModal') videoBlacklistModal: VideoBlacklistComponent
 
   @Input() video: Video | VideoDetails
+  @Input() videoCaptions: VideoCaption[] = []
 
   @Input() displayOptions: VideoActionsDisplayType = {
     playlist: false,
@@ -44,7 +48,8 @@ export class VideoActionsDropdownComponent implements OnChanges {
     update: true,
     blacklist: true,
     delete: true,
-    report: true
+    report: true,
+    duplicate: true
   }
   @Input() placement = 'left'
 
@@ -57,6 +62,7 @@ export class VideoActionsDropdownComponent implements OnChanges {
   @Output() videoRemoved = new EventEmitter()
   @Output() videoUnblacklisted = new EventEmitter()
   @Output() videoBlacklisted = new EventEmitter()
+  @Output() modalOpened = new EventEmitter()
 
   videoActions: DropdownAction<{ video: Video }>[][] = []
 
@@ -71,6 +77,7 @@ export class VideoActionsDropdownComponent implements OnChanges {
     private screenService: ScreenService,
     private videoService: VideoService,
     private blocklistService: BlocklistService,
+    private redundancyService: RedundancyService,
     private i18n: I18n
   ) { }
 
@@ -102,14 +109,20 @@ export class VideoActionsDropdownComponent implements OnChanges {
   /* Show modals */
 
   showDownloadModal () {
-    this.videoDownloadModal.show(this.video as VideoDetails)
+    this.modalOpened.emit()
+
+    this.videoDownloadModal.show(this.video as VideoDetails, this.videoCaptions)
   }
 
   showReportModal () {
+    this.modalOpened.emit()
+
     this.videoReportModal.show()
   }
 
   showBlacklistModal () {
+    this.modalOpened.emit()
+
     this.videoBlacklistModal.show()
   }
 
@@ -133,6 +146,10 @@ export class VideoActionsDropdownComponent implements OnChanges {
 
   isVideoDownloadable () {
     return this.video && this.video instanceof VideoDetails && this.video.downloadEnabled
+  }
+
+  canVideoBeDuplicated () {
+    return this.video.canBeDuplicatedBy(this.user)
   }
 
   /* Action handlers */
@@ -160,6 +177,8 @@ export class VideoActionsDropdownComponent implements OnChanges {
   }
 
   async removeVideo () {
+    this.modalOpened.emit()
+
     const res = await this.confirmService.confirm(this.i18n('Do you really want to delete this video?'), this.i18n('Delete'))
     if (res === false) return
 
@@ -173,6 +192,18 @@ export class VideoActionsDropdownComponent implements OnChanges {
 
           error => this.notifier.error(error.message)
         )
+  }
+
+  duplicateVideo () {
+    this.redundancyService.addVideoRedundancy(this.video)
+      .subscribe(
+        () => {
+          const message = this.i18n('This video will be duplicated by your instance.')
+          this.notifier.success(message)
+        },
+
+        err => this.notifier.error(err.message)
+      )
   }
 
   onVideoBlacklisted () {
@@ -221,6 +252,12 @@ export class VideoActionsDropdownComponent implements OnChanges {
           handler: () => this.unblacklistVideo(),
           iconName: 'undo',
           isDisplayed: () => this.authService.isLoggedIn() && this.displayOptions.blacklist && this.isVideoUnblacklistable()
+        },
+        {
+          label: this.i18n('Duplicate (redundancy)'),
+          handler: () => this.duplicateVideo(),
+          isDisplayed: () => this.authService.isLoggedIn() && this.displayOptions.duplicate && this.canVideoBeDuplicated(),
+          iconName: 'cloud-download'
         },
         {
           label: this.i18n('Delete'),

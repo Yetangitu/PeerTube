@@ -1,5 +1,5 @@
 import { Account as AccountInterface } from '../../../../../../shared/models/actors'
-import { VideoComment as VideoCommentServerModel } from '../../../../../../shared/models/videos/video-comment.model'
+import { VideoComment as VideoCommentServerModel, VideoCommentCreate } from '../../../../../../shared/models/videos/video-comment.model'
 import { Actor } from '@app/shared/actor/actor.model'
 import { getAbsoluteAPIUrl } from '@app/shared/misc/utils'
 
@@ -12,7 +12,10 @@ export class VideoComment implements VideoCommentServerModel {
   videoId: number
   createdAt: Date | string
   updatedAt: Date | string
+  deletedAt: Date | string
+  isDeleted: boolean
   account: AccountInterface
+  totalRepliesFromVideoAuthor: number
   totalReplies: number
   by: string
   accountAvatarUrl: string
@@ -28,14 +31,19 @@ export class VideoComment implements VideoCommentServerModel {
     this.videoId = hash.videoId
     this.createdAt = new Date(hash.createdAt.toString())
     this.updatedAt = new Date(hash.updatedAt.toString())
+    this.deletedAt = hash.deletedAt ? new Date(hash.deletedAt.toString()) : null
+    this.isDeleted = hash.isDeleted
     this.account = hash.account
+    this.totalRepliesFromVideoAuthor = hash.totalRepliesFromVideoAuthor
     this.totalReplies = hash.totalReplies
 
-    this.by = Actor.CREATE_BY_STRING(this.account.name, this.account.host)
-    this.accountAvatarUrl = Actor.GET_ACTOR_AVATAR_URL(this.account)
+    if (this.account) {
+      this.by = Actor.CREATE_BY_STRING(this.account.name, this.account.host)
+      this.accountAvatarUrl = Actor.GET_ACTOR_AVATAR_URL(this.account)
 
-    const absoluteAPIUrl = getAbsoluteAPIUrl()
-    const thisHost = new URL(absoluteAPIUrl).host
-    this.isLocal = this.account.host.trim() === thisHost
+      const absoluteAPIUrl = getAbsoluteAPIUrl()
+      const thisHost = new URL(absoluteAPIUrl).host
+      this.isLocal = this.account.host.trim() === thisHost
+    }
   }
 }

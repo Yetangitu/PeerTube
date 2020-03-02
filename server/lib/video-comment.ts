@@ -7,9 +7,9 @@ import { sendCreateVideoComment } from './activitypub/send'
 import { MAccountDefault, MComment, MCommentOwnerVideoReply, MVideoFullLight } from '../typings/models'
 
 async function createVideoComment (obj: {
-  text: string,
-  inReplyToComment: MComment | null,
-  video: MVideoFullLight,
+  text: string
+  inReplyToComment: MComment | null
+  video: MVideoFullLight
   account: MAccountDefault
 }, t: Sequelize.Transaction) {
   let originCommentId: number | null = null
@@ -73,9 +73,16 @@ function buildFormattedCommentTree (resultList: ResultList<VideoCommentModel>): 
   return thread
 }
 
+function markCommentAsDeleted (comment: MCommentOwnerVideoReply): void {
+  comment.text = ''
+  comment.deletedAt = new Date()
+  comment.accountId = null
+}
+
 // ---------------------------------------------------------------------------
 
 export {
   createVideoComment,
-  buildFormattedCommentTree
+  buildFormattedCommentTree,
+  markCommentAsDeleted
 }

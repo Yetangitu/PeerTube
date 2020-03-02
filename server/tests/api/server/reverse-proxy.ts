@@ -1,4 +1,4 @@
-/* tslint:disable:no-unused-expression */
+/* eslint-disable @typescript-eslint/no-unused-expressions,@typescript-eslint/require-await */
 
 import 'mocha'
 import * as chai from 'chai'
@@ -103,8 +103,12 @@ describe('Test application behind a reverse proxy', function () {
   })
 
   it('Should rate limit signup', async function () {
-    for (let i = 0; i < 3; i++) {
-      await registerUser(server.url, 'test' + i, 'password')
+    for (let i = 0; i < 10; i++) {
+      try {
+        await registerUser(server.url, 'test' + i, 'password')
+      } catch {
+        // empty
+      }
     }
 
     await registerUser(server.url, 'test42', 'password', 429)

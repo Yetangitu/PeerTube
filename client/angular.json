@@ -7,11 +7,111 @@
       "root": "",
       "sourceRoot": "src",
       "projectType": "application",
+      "i18n": {
+        "sourceLocale": {
+          "code": "en",
+          "baseHref": "/client/en-US/"
+        },
+        "locales": {
+          "hu": {
+            "translation": "src/locale/angular.hu-HU.xlf",
+            "baseHref": "/client/hu-HU/"
+          },
+          "th": {
+            "translation": "src/locale/angular.th-TH.xlf",
+            "baseHref": "/client/th-TH/"
+          },
+          "fi": {
+            "translation": "src/locale/angular.fi-FI.xlf",
+            "baseHref": "/client/fi-FI/"
+          },
+          "nl": {
+            "translation": "src/locale/angular.nl-NL.xlf",
+            "baseHref": "/client/nl-NL/"
+          },
+          "gd": {
+            "translation": "src/locale/angular.gd.xlf",
+            "baseHref": "/client/gd/"
+          },
+          "el": {
+            "translation": "src/locale/angular.el-GR.xlf",
+            "baseHref": "/client/el-GR/"
+          },
+          "es": {
+            "translation": "src/locale/angular.es-ES.xlf",
+            "baseHref": "/client/es-ES/"
+          },
+          "oc": {
+            "translation": "src/locale/angular.oc.xlf",
+            "baseHref": "/client/oc/"
+          },
+          "pt": {
+            "translation": "src/locale/angular.pt-BR.xlf",
+            "baseHref": "/client/pt-BR/"
+          },
+          "pt-PT": {
+            "translation": "src/locale/angular.pt-PT.xlf",
+            "baseHref": "/client/pt-PT/"
+          },
+          "sv": {
+            "translation": "src/locale/angular.sv-SE.xlf",
+            "baseHref": "/client/sv-SE/"
+          },
+          "pl": {
+            "translation": "src/locale/angular.pl-PL.xlf",
+            "baseHref": "/client/pl-PL/"
+          },
+          "ru": {
+            "translation": "src/locale/angular.ru-RU.xlf",
+            "baseHref": "/client/ru-RU/"
+          },
+          "zh-Hans": {
+            "translation": "src/locale/angular.zh-Hans-CN.xlf",
+            "baseHref": "/client/zh-Hans-CN/"
+          },
+          "zh-Hant": {
+            "translation": "src/locale/angular.zh-Hant-TW.xlf",
+            "baseHref": "/client/zh-Hant-TW/"
+          },
+          "fr": {
+            "translation": "src/locale/angular.fr-FR.xlf",
+            "baseHref": "/client/fr-FR/"
+          },
+          "ja": {
+            "translation": "src/locale/angular.ja-JP.xlf",
+            "baseHref": "/client/ja-JP/"
+          },
+          "eu": {
+            "translation": "src/locale/angular.eu-ES.xlf",
+            "baseHref": "/client/eu-ES/"
+          },
+          "ca": {
+            "translation": "src/locale/angular.ca-ES.xlf",
+            "baseHref": "/client/ca-ES/"
+          },
+          "cs": {
+            "translation": "src/locale/angular.cs-CZ.xlf",
+            "baseHref": "/client/cs-CZ/"
+          },
+          "eo": {
+            "translation": "src/locale/angular.eo.xlf",
+            "baseHref": "/client/eo/"
+          },
+          "de": {
+            "translation": "src/locale/angular.de-DE.xlf",
+            "baseHref": "/client/de-DE/"
+          },
+          "it": {
+            "translation": "src/locale/angular.it-IT.xlf",
+            "baseHref": "/client/it-IT/"
+          }
+        }
+      },
       "architect": {
         "build": {
           "builder": "@angular-devkit/build-angular:browser",
           "options": {
-            "deployUrl": "client/",
+            "aot": true,
             "outputPath": "dist",
             "index": "src/index.html",
             "main": "src/main.ts",
@@ -64,6 +164,12 @@
               ]
             },
             "hmr": {
+              "budgets": [
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "6kb"
+                }
+              ],
               "fileReplacements": [
                 {
                   "replace": "src/environments/environment.ts",
@@ -72,12 +178,87 @@
               ]
             },
             "e2e": {
+              "budgets": [
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "6kb"
+                }
+              ],
               "fileReplacements": [
                 {
                   "replace": "src/environments/environment.ts",
                   "with": "src/environments/environment.e2e.ts"
                 }
               ]
+            },
+            "hu-HU": {
+              "localize": [ "hu" ]
+            },
+            "th-TH": {
+              "localize":  [ "th" ]
+            },
+            "fi-FI": {
+              "localize":  [ "fi" ]
+            },
+            "nl-NL": {
+              "localize":  [ "nl" ]
+            },
+            "gd": {
+              "localize":  [ "gd" ]
+            },
+            "el-GR": {
+              "localize":  [ "el" ]
+            },
+            "es-ES": {
+              "localize":  [ "es" ]
+            },
+            "oc": {
+              "localize":  [ "oc" ]
+            },
+            "pt-BR": {
+              "localize":  [ "pt" ]
+            },
+            "pt-PT": {
+              "localize":  [ "pt-PT" ]
+            },
+            "sv-SE": {
+              "localize":  [ "sv" ]
+            },
+            "pl-PL": {
+              "localize":  [ "pl" ]
+            },
+            "ru-RU": {
+              "localize":  [ "ru" ]
+            },
+            "zh-Hans-CN": {
+              "localize":  [ "zh-Hans" ]
+            },
+            "zh-Hant-TW": {
+              "localize":  [ "zh-Hant" ]
+            },
+            "fr-FR": {
+              "localize":  [ "fr" ]
+            },
+            "ja-JP": {
+              "localize":  [ "ja" ]
+            },
+            "eu-ES": {
+              "localize":  [ "eu" ]
+            },
+            "ca-ES": {
+              "localize":  [ "ca" ]
+            },
+            "cs-CZ": {
+              "localize":  [ "cs" ]
+            },
+            "eo": {
+              "localize":  [ "eo" ]
+            },
+            "de-DE": {
+              "localize":  [ "de" ]
+            },
+            "it-IT": {
+              "localize":  [ "it" ]
             }
           }
         },
@@ -134,6 +315,59 @@
             "exclude": [
               "**/node_modules/**"
             ]
+          }
+        },
+        "xliffmerge": {
+          "builder": "@ngx-i18nsupport/tooling:xliffmerge",
+          "options": {
+            "xliffmergeOptions": {
+              "i18nFormat": "xlf",
+              "srcDir": "src/locale",
+              "genDir": "src/locale",
+              "i18nBaseFile": "angular",
+              "defaultLanguage": "en-US",
+              "languages": [
+                "ar-001",
+                "ca-ES",
+                "cs-CZ",
+                "da-DK",
+                "de-DE",
+                "el-GR",
+                "en-GB",
+                "en-US",
+                "eo",
+                "es-ES",
+                "eu-ES",
+                "fa-IR",
+                "fi-FI",
+                "fr-FR",
+                "gd",
+                "gl-ES",
+                "hu-HU",
+                "it-IT",
+                "ja-JP",
+                "jbo",
+                "ko-KR",
+                "lt-LT",
+                "nb-NO",
+                "nl-NL",
+                "oc",
+                "pl-PL",
+                "pt-BR",
+                "pt-PT",
+                "ru-RU",
+                "sk-SK",
+                "sl-SI",
+                "sv-SE",
+                "ta",
+                "th-TH",
+                "tr-TR",
+                "uk-UA",
+                "vi-VN",
+                "zh-Hans-CN",
+                "zh-Hant-TW"
+              ]
+            }
           }
         }
       }

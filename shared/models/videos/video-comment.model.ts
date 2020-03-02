@@ -9,6 +9,9 @@ export interface VideoComment {
   videoId: number
   createdAt: Date | string
   updatedAt: Date | string
+  deletedAt: Date | string
+  isDeleted: boolean
+  totalRepliesFromVideoAuthor: number
   totalReplies: number
   account: Account
 }

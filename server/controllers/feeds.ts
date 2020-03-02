@@ -6,7 +6,9 @@ import {
   setDefaultSort,
   videoCommentsFeedsValidator,
   videoFeedsValidator,
-  videosSortValidator
+  videosSortValidator,
+  feedsFormatValidator,
+  setFeedFormatContentType
 } from '../middlewares'
 import { VideoModel } from '../models/video/video'
 import * as Feed from 'pfeed'
@@ -18,7 +20,13 @@ import { CONFIG } from '../initializers/config'
 const feedsRouter = express.Router()
 
 feedsRouter.get('/feeds/video-comments.:format',
-  asyncMiddleware(cacheRoute(ROUTE_CACHE_LIFETIME.FEEDS)),
+  feedsFormatValidator,
+  setFeedFormatContentType,
+  asyncMiddleware(cacheRoute({
+    headerBlacklist: [
+      'Content-Type'
+    ]
+  })(ROUTE_CACHE_LIFETIME.FEEDS)),
   asyncMiddleware(videoCommentsFeedsValidator),
   asyncMiddleware(generateVideoCommentsFeed)
 )
@@ -26,7 +34,13 @@ feedsRouter.get('/feeds/video-comments.:format',
 feedsRouter.get('/feeds/videos.:format',
   videosSortValidator,
   setDefaultSort,
-  asyncMiddleware(cacheRoute(ROUTE_CACHE_LIFETIME.FEEDS)),
+  feedsFormatValidator,
+  setFeedFormatContentType,
+  asyncMiddleware(cacheRoute({
+    headerBlacklist: [
+      'Content-Type'
+    ]
+  })(ROUTE_CACHE_LIFETIME.FEEDS)),
   commonVideosFiltersValidator,
   asyncMiddleware(videoFeedsValidator),
   asyncMiddleware(generateVideoFeed)
@@ -56,17 +70,23 @@ async function generateVideoCommentsFeed (req: express.Request, res: express.Res
   comments.forEach(comment => {
     const link = WEBSERVER.URL + comment.getCommentStaticPath()
 
+    let title = comment.Video.name
+    const author: { name: string, link: string }[] = []
+
+    if (comment.Account) {
+      title += ` - ${comment.Account.getDisplayName()}`
+      author.push({
+        name: comment.Account.getDisplayName(),
+        link: comment.Account.Actor.url
+      })
+    }
+
     feed.addItem({
-      title: `${comment.Video.name} - ${comment.Account.getDisplayName()}`,
+      title,
       id: comment.url,
       link,
       content: comment.text,
-      author: [
-        {
-          name: comment.Account.getDisplayName(),
-          link: comment.Account.Actor.url
-        }
-      ],
+      author,
       date: comment.createdAt
     })
   })
@@ -113,11 +133,36 @@ async function generateVideoFeed (req: express.Request, res: express.Response) {
   // Adding video items to the feed, one at a time
   resultList.data.forEach(video => {
     const formattedVideoFiles = video.getFormattedVideoFilesJSON()
+
     const torrents = formattedVideoFiles.map(videoFile => ({
       title: video.name,
       url: videoFile.torrentUrl,
       size_in_bytes: videoFile.size
     }))
+
+    const videos = formattedVideoFiles.map(videoFile => {
+      const result = {
+        type: 'video/mp4',
+        medium: 'video',
+        height: videoFile.resolution.label.replace('p', ''),
+        fileSize: videoFile.size,
+        url: videoFile.fileUrl,
+        framerate: videoFile.fps,
+        duration: video.duration
+      }
+
+      if (video.language) Object.assign(result, { lang: video.language })
+
+      return result
+    })
+
+    const categories: { value: number, label: string }[] = []
+    if (video.category) {
+      categories.push({
+        value: video.category,
+        label: VideoModel.getCategoryLabel(video.category)
+      })
+    }
 
     feed.addItem({
       title: video.name,
@@ -132,9 +177,22 @@ async function generateVideoFeed (req: express.Request, res: express.Response) {
         }
       ],
       date: video.publishedAt,
-      language: video.language,
       nsfw: video.nsfw,
       torrent: torrents,
+      videos,
+      embed: {
+        url: video.getEmbedStaticPath(),
+        allowFullscreen: true
+      },
+      player: {
+        url: video.getWatchStaticPath()
+      },
+      categories,
+      community: {
+        statistics: {
+          views: video.views
+        }
+      },
       thumbnail: [
         {
           url: WEBSERVER.URL + video.getMiniatureStaticPath(),
@@ -180,26 +238,21 @@ function sendFeed (feed, req: express.Request, res: express.Response) {
   const format = req.params.format
 
   if (format === 'atom' || format === 'atom1') {
-    res.set('Content-Type', 'application/atom+xml')
     return res.send(feed.atom1()).end()
   }
 
   if (format === 'json' || format === 'json1') {
-    res.set('Content-Type', 'application/json')
     return res.send(feed.json1()).end()
   }
 
   if (format === 'rss' || format === 'rss2') {
-    res.set('Content-Type', 'application/rss+xml')
     return res.send(feed.rss2()).end()
   }
 
   // We're in the ambiguous '.xml' case and we look at the format query parameter
   if (req.query.format === 'atom' || req.query.format === 'atom1') {
-    res.set('Content-Type', 'application/atom+xml')
     return res.send(feed.atom1()).end()
   }
 
-  res.set('Content-Type', 'application/rss+xml')
   return res.send(feed.rss2()).end()
 }

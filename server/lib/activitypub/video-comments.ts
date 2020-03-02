@@ -10,9 +10,9 @@ import { checkUrlsSameHost } from '../../helpers/activitypub'
 import { MCommentOwner, MCommentOwnerVideo, MVideoAccountLightBlacklistAllFiles } from '../../typings/models/video'
 
 type ResolveThreadParams = {
-  url: string,
-  comments?: MCommentOwner[],
-  isVideo?: boolean,
+  url: string
+  comments?: MCommentOwner[]
+  isVideo?: boolean
   commentCreated?: boolean
 }
 type ResolveThreadResult = Promise<{ video: MVideoAccountLightBlacklistAllFiles, comment: MCommentOwnerVideo, commentCreated: boolean }>
@@ -28,7 +28,7 @@ async function resolveThread (params: ResolveThreadParams): ResolveThreadResult 
   if (params.commentCreated === undefined) params.commentCreated = false
   if (params.comments === undefined) params.comments = []
 
-   // Already have this comment?
+  // Already have this comment?
   if (isVideo !== true) {
     const result = await resolveCommentFromDB(params)
     if (result) return result
@@ -87,7 +87,7 @@ async function tryResolveThreadFromVideo (params: ResolveThreadParams) {
 
   let resultComment: MCommentOwnerVideo
   if (comments.length !== 0) {
-    const firstReply = comments[ comments.length - 1 ] as MCommentOwnerVideo
+    const firstReply = comments[comments.length - 1] as MCommentOwnerVideo
     firstReply.inReplyToCommentId = null
     firstReply.originCommentId = null
     firstReply.videoId = video.id
@@ -97,9 +97,9 @@ async function tryResolveThreadFromVideo (params: ResolveThreadParams) {
     comments[comments.length - 1] = await firstReply.save()
 
     for (let i = comments.length - 2; i >= 0; i--) {
-      const comment = comments[ i ] as MCommentOwnerVideo
+      const comment = comments[i] as MCommentOwnerVideo
       comment.originCommentId = firstReply.id
-      comment.inReplyToCommentId = comments[ i + 1 ].id
+      comment.inReplyToCommentId = comments[i + 1].id
       comment.videoId = video.id
       comment.changed('updatedAt', true)
       comment.Video = video
@@ -120,7 +120,7 @@ async function resolveParentComment (params: ResolveThreadParams) {
     throw new Error('Recursion limit reached when resolving a thread')
   }
 
-  const { body } = await doRequest({
+  const { body } = await doRequest<any>({
     uri: url,
     json: true,
     activityPub: true
@@ -131,9 +131,9 @@ async function resolveParentComment (params: ResolveThreadParams) {
   }
 
   const actorUrl = body.attributedTo
-  if (!actorUrl) throw new Error('Miss attributed to in comment')
+  if (!actorUrl && body.type !== 'Tombstone') throw new Error('Miss attributed to in comment')
 
-  if (checkUrlsSameHost(url, actorUrl) !== true) {
+  if (actorUrl && checkUrlsSameHost(url, actorUrl) !== true) {
     throw new Error(`Actor url ${actorUrl} has not the same host than the comment url ${url}`)
   }
 
@@ -141,18 +141,22 @@ async function resolveParentComment (params: ResolveThreadParams) {
     throw new Error(`Comment url ${url} host is different from the AP object id ${body.id}`)
   }
 
-  const actor = await getOrCreateActorAndServerAndModel(actorUrl, 'all')
+  const actor = actorUrl
+    ? await getOrCreateActorAndServerAndModel(actorUrl, 'all')
+    : null
+
   const comment = new VideoCommentModel({
     url: body.id,
-    text: body.content,
+    text: body.content ? body.content : '',
     videoId: null,
-    accountId: actor.Account.id,
+    accountId: actor ? actor.Account.id : null,
     inReplyToCommentId: null,
     originCommentId: null,
     createdAt: new Date(body.published),
-    updatedAt: new Date(body.updated)
+    updatedAt: new Date(body.updated),
+    deletedAt: body.deleted ? new Date(body.deleted) : null
   }) as MCommentOwner
-  comment.Account = actor.Account
+  comment.Account = actor ? actor.Account : null
 
   return resolveThread({
     url: body.inReplyTo,

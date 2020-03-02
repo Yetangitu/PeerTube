@@ -1,6 +1,5 @@
 import { values } from 'lodash'
 import { extname } from 'path'
-import * as Sequelize from 'sequelize'
 import {
   AllowNull,
   BelongsTo,
@@ -17,7 +16,7 @@ import {
   Table,
   UpdatedAt
 } from 'sequelize-typescript'
-import { ActivityPubActorType } from '../../../shared/models/activitypub'
+import { ActivityIconObject, ActivityPubActorType } from '../../../shared/models/activitypub'
 import { Avatar } from '../../../shared/models/avatars/avatar.model'
 import { activityPubContextify } from '../../helpers/activitypub'
 import {
@@ -28,7 +27,7 @@ import {
   isActorPublicKeyValid
 } from '../../helpers/custom-validators/activitypub/actor'
 import { isActivityPubUrlValid } from '../../helpers/custom-validators/activitypub/misc'
-import { ACTIVITY_PUB, ACTIVITY_PUB_ACTOR_TYPES, CONSTRAINTS_FIELDS, WEBSERVER } from '../../initializers/constants'
+import { ACTIVITY_PUB, ACTIVITY_PUB_ACTOR_TYPES, CONSTRAINTS_FIELDS, SERVER_ACTOR_NAME, WEBSERVER } from '../../initializers/constants'
 import { AccountModel } from '../account/account'
 import { AvatarModel } from '../avatar/avatar'
 import { ServerModel } from '../server/server'
@@ -44,10 +43,12 @@ import {
   MActorFull,
   MActorHost,
   MActorServer,
-  MActorSummaryFormattable,
+  MActorSummaryFormattable, MActorUrl,
   MActorWithInboxes
 } from '../../typings/models'
 import * as Bluebird from 'bluebird'
+import { Op, Transaction, literal } from 'sequelize'
+import { ModelCache } from '@server/models/model-cache'
 
 enum ScopeNames {
   FULL = 'FULL'
@@ -115,8 +116,20 @@ export const unusedActorAttributesForAPI = [
     },
     {
       fields: [ 'preferredUsername', 'serverId' ],
-      unique: true
+      unique: true,
+      where: {
+        serverId: {
+          [Op.ne]: null
+        }
+      }
     },
+    // {
+    //   fields: [ 'preferredUsername' ],
+    //   unique: true,
+    //   where: {
+    //     serverId: null
+    //   }
+    // },
     {
       fields: [ 'inboxUrl', 'sharedInboxUrl' ]
     },
@@ -272,7 +285,7 @@ export class ActorModel extends Model<ActorModel> {
     return ActorModel.scope(ScopeNames.FULL).findByPk(id)
   }
 
-  static loadFromAccountByVideoId (videoId: number, transaction: Sequelize.Transaction): Bluebird<MActor> {
+  static loadFromAccountByVideoId (videoId: number, transaction: Transaction): Bluebird<MActor> {
     const query = {
       include: [
         {
@@ -316,11 +329,11 @@ export class ActorModel extends Model<ActorModel> {
       .then(a => !!a)
   }
 
-  static listByFollowersUrls (followersUrls: string[], transaction?: Sequelize.Transaction): Bluebird<MActorFull[]> {
+  static listByFollowersUrls (followersUrls: string[], transaction?: Transaction): Bluebird<MActorFull[]> {
     const query = {
       where: {
         followersUrl: {
-          [ Sequelize.Op.in ]: followersUrls
+          [Op.in]: followersUrls
         }
       },
       transaction
@@ -329,16 +342,51 @@ export class ActorModel extends Model<ActorModel> {
     return ActorModel.scope(ScopeNames.FULL).findAll(query)
   }
 
-  static loadLocalByName (preferredUsername: string, transaction?: Sequelize.Transaction): Bluebird<MActorFull> {
-    const query = {
-      where: {
-        preferredUsername,
-        serverId: null
-      },
-      transaction
+  static loadLocalByName (preferredUsername: string, transaction?: Transaction): Bluebird<MActorFull> {
+    const fun = () => {
+      const query = {
+        where: {
+          preferredUsername,
+          serverId: null
+        },
+        transaction
+      }
+
+      return ActorModel.scope(ScopeNames.FULL)
+                       .findOne(query)
     }
 
-    return ActorModel.scope(ScopeNames.FULL).findOne(query)
+    return ModelCache.Instance.doCache({
+      cacheType: 'local-actor-name',
+      key: preferredUsername,
+      // The server actor never change, so we can easily cache it
+      whitelist: () => preferredUsername === SERVER_ACTOR_NAME,
+      fun
+    })
+  }
+
+  static loadLocalUrlByName (preferredUsername: string, transaction?: Transaction): Bluebird<MActorUrl> {
+    const fun = () => {
+      const query = {
+        attributes: [ 'url' ],
+        where: {
+          preferredUsername,
+          serverId: null
+        },
+        transaction
+      }
+
+      return ActorModel.unscoped()
+                       .findOne(query)
+    }
+
+    return ModelCache.Instance.doCache({
+      cacheType: 'local-actor-name',
+      key: preferredUsername,
+      // The server actor never change, so we can easily cache it
+      whitelist: () => preferredUsername === SERVER_ACTOR_NAME,
+      fun
+    })
   }
 
   static loadByNameAndHost (preferredUsername: string, host: string): Bluebird<MActorFull> {
@@ -360,7 +408,7 @@ export class ActorModel extends Model<ActorModel> {
     return ActorModel.scope(ScopeNames.FULL).findOne(query)
   }
 
-  static loadByUrl (url: string, transaction?: Sequelize.Transaction): Bluebird<MActorAccountChannelId> {
+  static loadByUrl (url: string, transaction?: Transaction): Bluebird<MActorAccountChannelId> {
     const query = {
       where: {
         url
@@ -383,7 +431,7 @@ export class ActorModel extends Model<ActorModel> {
     return ActorModel.unscoped().findOne(query)
   }
 
-  static loadByUrlAndPopulateAccountAndChannel (url: string, transaction?: Sequelize.Transaction): Bluebird<MActorFull> {
+  static loadByUrlAndPopulateAccountAndChannel (url: string, transaction?: Transaction): Bluebird<MActorFull> {
     const query = {
       where: {
         url
@@ -394,13 +442,54 @@ export class ActorModel extends Model<ActorModel> {
     return ActorModel.scope(ScopeNames.FULL).findOne(query)
   }
 
-  static incrementFollows (id: number, column: 'followersCount' | 'followingCount', by: number) {
-    return ActorModel.increment(column, {
-      by,
-      where: {
-        id
-      }
-    })
+  static rebuildFollowsCount (ofId: number, type: 'followers' | 'following', transaction?: Transaction) {
+    const sanitizedOfId = parseInt(ofId + '', 10)
+    const where = { id: sanitizedOfId }
+
+    let columnToUpdate: string
+    let columnOfCount: string
+
+    if (type === 'followers') {
+      columnToUpdate = 'followersCount'
+      columnOfCount = 'targetActorId'
+    } else {
+      columnToUpdate = 'followingCount'
+      columnOfCount = 'actorId'
+    }
+
+    return ActorModel.update({
+      [columnToUpdate]: literal(`(SELECT COUNT(*) FROM "actorFollow" WHERE "${columnOfCount}" = ${sanitizedOfId})`)
+    }, { where, transaction })
+  }
+
+  static loadAccountActorByVideoId (videoId: number): Bluebird<MActor> {
+    const query = {
+      include: [
+        {
+          attributes: [ 'id' ],
+          model: AccountModel.unscoped(),
+          required: true,
+          include: [
+            {
+              attributes: [ 'id', 'accountId' ],
+              model: VideoChannelModel.unscoped(),
+              required: true,
+              include: [
+                {
+                  attributes: [ 'id', 'channelId' ],
+                  model: VideoModel.unscoped(),
+                  where: {
+                    id: videoId
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+
+    return ActorModel.unscoped().findOne(query)
   }
 
   getSharedInbox (this: MActorWithInboxes) {
@@ -435,9 +524,11 @@ export class ActorModel extends Model<ActorModel> {
   }
 
   toActivityPubObject (this: MActorAP, name: string) {
-    let icon = undefined
+    let icon: ActivityIconObject
+
     if (this.avatarId) {
       const extension = extname(this.Avatar.filename)
+
       icon = {
         type: 'Image',
         mediaType: extension === '.png' ? 'image/png' : 'image/jpeg',
@@ -470,7 +561,7 @@ export class ActorModel extends Model<ActorModel> {
     return activityPubContextify(json)
   }
 
-  getFollowerSharedInboxUrls (t: Sequelize.Transaction) {
+  getFollowerSharedInboxUrls (t: Transaction) {
     const query = {
       attributes: [ 'sharedInboxUrl' ],
       include: [

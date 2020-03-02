@@ -1,6 +1,7 @@
 import { AccountVideoRateModel } from '@server/models/account/account-video-rate'
 import { PickWith } from '@server/typings/utils'
-import { MAccountAudience, MAccountUrl, MVideo, MVideoFormattable } from '..'
+import { MAccountAudience, MAccountUrl } from '../account/account'
+import { MVideo, MVideoFormattable } from './video'
 
 type Use<K extends keyof AccountVideoRateModel, M> = PickWith<AccountVideoRateModel, K, M>
 
@@ -8,10 +9,12 @@ type Use<K extends keyof AccountVideoRateModel, M> = PickWith<AccountVideoRateMo
 
 export type MAccountVideoRate = Omit<AccountVideoRateModel, 'Video' | 'Account'>
 
-export type MAccountVideoRateAccountUrl = MAccountVideoRate &
+export type MAccountVideoRateAccountUrl =
+  MAccountVideoRate &
   Use<'Account', MAccountUrl>
 
-export type MAccountVideoRateAccountVideo = MAccountVideoRate &
+export type MAccountVideoRateAccountVideo =
+  MAccountVideoRate &
   Use<'Account', MAccountAudience> &
   Use<'Video', MVideo>
 
@@ -19,5 +22,6 @@ export type MAccountVideoRateAccountVideo = MAccountVideoRate &
 
 // Format for API or AP object
 
-export type MAccountVideoRateFormattable = Pick<MAccountVideoRate, 'type'> &
+export type MAccountVideoRateFormattable =
+  Pick<MAccountVideoRate, 'type'> &
   Use<'Video', MVideoFormattable>

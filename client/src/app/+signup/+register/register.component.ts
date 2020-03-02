@@ -4,9 +4,11 @@ import { UserService, UserValidatorsService } from '@app/shared'
 import { I18n } from '@ngx-translate/i18n-polyfill'
 import { UserRegister } from '@shared/models/users/user-register.model'
 import { FormGroup } from '@angular/forms'
-import { About } from '@shared/models/server'
+import { About, ServerConfig } from '@shared/models/server'
 import { InstanceService } from '@app/shared/instance/instance.service'
+import { HooksService } from '@app/core/plugins/hooks.service'
 import { NgbAccordion } from '@ng-bootstrap/ng-bootstrap'
+import { ActivatedRoute } from '@angular/router'
 
 @Component({
   selector: 'my-register',
@@ -33,7 +35,10 @@ export class RegisterComponent implements OnInit {
   formStepUser: FormGroup
   formStepChannel: FormGroup
 
+  private serverConfig: ServerConfig
+
   constructor (
+    private route: ActivatedRoute,
     private authService: AuthService,
     private userValidatorsService: UserValidatorsService,
     private notifier: Notifier,
@@ -41,15 +46,18 @@ export class RegisterComponent implements OnInit {
     private serverService: ServerService,
     private redirectService: RedirectService,
     private instanceService: InstanceService,
+    private hooks: HooksService,
     private i18n: I18n
   ) {
   }
 
   get requiresEmailVerification () {
-    return this.serverService.getConfig().signup.requiresEmailVerification
+    return this.serverConfig.signup.requiresEmailVerification
   }
 
   ngOnInit (): void {
+    this.serverConfig = this.route.snapshot.data.serverConfig
+
     this.instanceService.getAbout()
       .subscribe(
         async about => {
@@ -60,6 +68,8 @@ export class RegisterComponent implements OnInit {
 
         err => this.notifier.error(err.message)
       )
+
+    this.hooks.runAction('action:signup.register.init', 'signup')
   }
 
   hasSameChannelAndAccountNames () {
@@ -94,10 +104,14 @@ export class RegisterComponent implements OnInit {
     if (this.accordion) this.accordion.toggle('code-of-conduct')
   }
 
-  signup () {
+  async signup () {
     this.error = null
 
-    const body: UserRegister = Object.assign(this.formStepUser.value, { channel: this.formStepChannel.value })
+    const body: UserRegister = await this.hooks.wrapObject(
+      Object.assign(this.formStepUser.value, { channel: this.formStepChannel.value }),
+      'signup',
+      'filter:api.signup.registration.create.params'
+    )
 
     this.userService.signup(body).subscribe(
       () => {

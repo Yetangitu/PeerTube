@@ -10,10 +10,10 @@ form {
   margin-bottom: 10px;
 
   img {
-    @include avatar(36px);
+    @include avatar(25px);
 
     vertical-align: top;
-    margin-right: 20px;
+    margin-right: 10px;
   }
 
   .form-group {
@@ -30,19 +30,34 @@ form {
   }
 }
 
-.submit-comment {
+.cancel-button {
+  font-weight: $font-semibold;
+  display: inline-block;
+  padding: 0 10px 0 10px;
+  white-space: nowrap;
+  background: transparent;
+}
+
+.comment-buttons {
   display: flex;
   justify-content: flex-end;
 
   button {
     @include peertube-button;
-    @include orange-button;
+
+    &:last-child {
+      @include orange-button;
+    }
   }
 }
 
-@media screen and (max-width: 450px) {
-  textarea, .submit-comment button {
+@media screen and (max-width: 600px) {
+  textarea, .comment-buttons button {
     font-size: 14px !important;
+  }
+
+  textarea {
+    padding: 5px !important;
   }
 }
 

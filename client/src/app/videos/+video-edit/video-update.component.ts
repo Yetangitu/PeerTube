@@ -35,7 +35,6 @@ export class VideoUpdateComponent extends FormReactive implements OnInit {
     private route: ActivatedRoute,
     private router: Router,
     private notifier: Notifier,
-    private serverService: ServerService,
     private videoService: VideoService,
     private loadingBar: LoadingBarService,
     private videoCaptionService: VideoCaptionService,
@@ -56,7 +55,7 @@ export class VideoUpdateComponent extends FormReactive implements OnInit {
 
           this.schedulePublicationPossible = this.video.privacy === VideoPrivacy.PRIVATE
 
-          const videoFiles = (video as VideoDetails).files
+          const videoFiles = (video as VideoDetails).getFiles()
           if (videoFiles.length > 1) { // Already transcoded
             this.waitTranscodingEnabled = false
           }

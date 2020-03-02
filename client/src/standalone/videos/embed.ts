@@ -1,21 +1,28 @@
 import './embed.scss'
 
-import { peertubeTranslate, ResultList, ServerConfig, VideoDetails } from '../../../../shared'
-import { VideoJSCaption } from '../../assets/player/peertube-videojs-typings'
+import {
+  peertubeTranslate,
+  ResultList,
+  ServerConfig,
+  VideoDetails
+} from '../../../../shared'
 import { VideoCaption } from '../../../../shared/models/videos/caption/video-caption.model'
 import {
   P2PMediaLoaderOptions,
-  PeertubePlayerManager,
   PeertubePlayerManagerOptions,
   PlayerMode
 } from '../../assets/player/peertube-player-manager'
 import { VideoStreamingPlaylistType } from '../../../../shared/models/videos/video-streaming-playlist.type'
 import { PeerTubeEmbedApi } from './embed-api'
+import { TranslationsManager } from '../../assets/player/translations-manager'
+import { VideoJsPlayer } from 'video.js'
+import { VideoJSCaption } from '../../assets/player/peertube-videojs-typings'
+
+type Translations = { [ id: string ]: string }
 
 export class PeerTubeEmbed {
   videoElement: HTMLVideoElement
-  player: any
-  playerOptions: any
+  player: VideoJsPlayer
   api: PeerTubeEmbedApi = null
   autoplay: boolean
   controls: boolean
@@ -64,7 +71,7 @@ export class PeerTubeEmbed {
     element.parentElement.removeChild(element)
   }
 
-  displayError (text: string, translations?: { [ id: string ]: string }) {
+  displayError (text: string, translations?: Translations) {
     // Remove video element
     if (this.videoElement) this.removeElement(this.videoElement)
 
@@ -83,12 +90,12 @@ export class PeerTubeEmbed {
     errorText.innerHTML = translatedText
   }
 
-  videoNotFound (translations?: { [ id: string ]: string }) {
+  videoNotFound (translations?: Translations) {
     const text = 'This video does not exist.'
     this.displayError(text, translations)
   }
 
-  videoFetchError (translations?: { [ id: string ]: string }) {
+  videoFetchError (translations?: Translations) {
     const text = 'We cannot fetch the video. Please try again later.'
     this.displayError(text, translations)
   }
@@ -116,13 +123,13 @@ export class PeerTubeEmbed {
     this.api.initialize()
   }
 
-  private loadParams () {
+  private loadParams (video: VideoDetails) {
     try {
       const params = new URL(window.location.toString()).searchParams
 
       this.autoplay = this.getParamToggle(params, 'autoplay', false)
       this.controls = this.getParamToggle(params, 'controls', true)
-      this.muted = this.getParamToggle(params, 'muted', false)
+      this.muted = this.getParamToggle(params, 'muted', undefined)
       this.loop = this.getParamToggle(params, 'loop', false)
       this.title = this.getParamToggle(params, 'title', true)
       this.enableApi = this.getParamToggle(params, 'api', this.enableApi)
@@ -136,7 +143,15 @@ export class PeerTubeEmbed {
       this.bigPlayBackgroundColor = this.getParamString(params, 'bigPlayBackgroundColor')
       this.foregroundColor = this.getParamString(params, 'foregroundColor')
 
-      this.mode = this.getParamString(params, 'mode') === 'p2p-media-loader' ? 'p2p-media-loader' : 'webtorrent'
+      const modeParam = this.getParamString(params, 'mode')
+
+      if (modeParam) {
+        if (modeParam === 'p2p-media-loader') this.mode = 'p2p-media-loader'
+        else this.mode = 'webtorrent'
+      } else {
+        if (Array.isArray(video.streamingPlaylists) && video.streamingPlaylists.length !== 0) this.mode = 'p2p-media-loader'
+        else this.mode = 'webtorrent'
+      }
     } catch (err) {
       console.error('Cannot get params from URL.', err)
     }
@@ -146,23 +161,33 @@ export class PeerTubeEmbed {
     const urlParts = window.location.pathname.split('/')
     const videoId = urlParts[ urlParts.length - 1 ]
 
-    const [ serverTranslations, videoResponse, captionsResponse, configResponse ] = await Promise.all([
-      PeertubePlayerManager.getServerTranslations(window.location.origin, navigator.language),
-      this.loadVideoInfo(videoId),
-      this.loadVideoCaptions(videoId),
-      this.loadConfig()
-    ])
+    const videoPromise = this.loadVideoInfo(videoId)
+    const captionsPromise = this.loadVideoCaptions(videoId)
+    const configPromise = this.loadConfig()
+
+    const translationsPromise = TranslationsManager.getServerTranslations(window.location.origin, navigator.language)
+    const videoResponse = await videoPromise
 
     if (!videoResponse.ok) {
+      const serverTranslations = await translationsPromise
+
       if (videoResponse.status === 404) return this.videoNotFound(serverTranslations)
 
       return this.videoFetchError(serverTranslations)
     }
 
     const videoInfo: VideoDetails = await videoResponse.json()
+    this.loadPlaceholder(videoInfo)
+
+    const PeertubePlayerManagerModulePromise = import('../../assets/player/peertube-player-manager')
+
+    const promises = [ translationsPromise, captionsPromise, configPromise, PeertubePlayerManagerModulePromise ]
+    const [ serverTranslations, captionsResponse, configResponse, PeertubePlayerManagerModule ] = await Promise.all(promises)
+
+    const PeertubePlayerManager = PeertubePlayerManagerModule.PeertubePlayerManager
     const videoCaptions = await this.buildCaptions(serverTranslations, captionsResponse)
 
-    this.loadParams()
+    this.loadParams(videoInfo)
 
     const options: PeertubePlayerManagerOptions = {
       common: {
@@ -186,7 +211,7 @@ export class PeerTubeEmbed {
         enableHotkeys: true,
         peertubeLink: true,
         poster: window.location.origin + videoInfo.previewPath,
-        theaterMode: false,
+        theaterButton: false,
 
         serverUrl: window.location.origin,
         language: navigator.language,
@@ -207,12 +232,12 @@ export class PeerTubeEmbed {
           segmentsSha256Url: hlsPlaylist.segmentsSha256Url,
           redundancyBaseUrls: hlsPlaylist.redundancies.map(r => r.baseUrl),
           trackerAnnounce: videoInfo.trackerUrls,
-          videoFiles: videoInfo.files
+          videoFiles: hlsPlaylist.files
         } as P2PMediaLoaderOptions
       })
     }
 
-    this.player = await PeertubePlayerManager.initialize(this.mode, options, player => this.player = player)
+    this.player = await PeertubePlayerManager.initialize(this.mode, options, (player: VideoJsPlayer) => this.player = player)
     this.player.on('customError', (event: any, data: any) => this.handleError(data.err, serverTranslations))
 
     window[ 'videojsPlayer' ] = this.player
@@ -222,6 +247,8 @@ export class PeerTubeEmbed {
     await this.buildDock(videoInfo, configResponse)
 
     this.initializeApi()
+
+    this.removePlaceholder()
   }
 
   private handleError (err: Error, translations?: { [ id: string ]: string }) {
@@ -234,19 +261,22 @@ export class PeerTubeEmbed {
   }
 
   private async buildDock (videoInfo: VideoDetails, configResponse: Response) {
-    if (this.controls) {
-      const title = this.title ? videoInfo.name : undefined
+    if (!this.controls) return
 
-      const config: ServerConfig = await configResponse.json()
-      const description = config.tracker.enabled && this.warningTitle
-        ? '<span class="text">' + this.player.localize('Watching this video may reveal your IP address to others.') + '</span>'
-        : undefined
+    // On webtorrent fallback, player may have been disposed
+    if (!this.player.player_) return
 
-      this.player.dock({
-        title,
-        description
-      })
-    }
+    const title = this.title ? videoInfo.name : undefined
+
+    const config: ServerConfig = await configResponse.json()
+    const description = config.tracker.enabled && this.warningTitle
+      ? '<span class="text">' + peertubeTranslate('Watching this video may reveal your IP address to others.') + '</span>'
+      : undefined
+
+    this.player.dock({
+      title,
+      description
+    })
   }
 
   private buildCSS () {
@@ -273,6 +303,22 @@ export class PeerTubeEmbed {
     }
 
     return []
+  }
+
+  private loadPlaceholder (video: VideoDetails) {
+    const placeholder = this.getPlaceholderElement()
+
+    const url = window.location.origin + video.previewPath
+    placeholder.style.backgroundImage = `url("${url}")`
+  }
+
+  private removePlaceholder () {
+    const placeholder = this.getPlaceholderElement()
+    placeholder.parentElement.removeChild(placeholder)
+  }
+
+  private getPlaceholderElement () {
+    return document.getElementById('placeholder-preview')
   }
 }
 

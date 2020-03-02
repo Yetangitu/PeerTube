@@ -1,16 +1,14 @@
-/* tslint:disable:no-unused-expression */
+/* eslint-disable @typescript-eslint/no-unused-expressions,@typescript-eslint/require-await */
 
 import 'mocha'
 
 import {
+  cleanupTests,
   createUser,
-  flushTests,
-  killallServers,
   flushAndRunServer,
   ServerInfo,
   setAccessTokensToServers,
-  userLogin,
-  cleanupTests
+  userLogin
 } from '../../../../shared/extra-utils'
 import {
   checkBadCountPagination,
@@ -51,6 +49,17 @@ describe('Test jobs API validators', function () {
       })
     })
 
+    it('Should fail with an incorrect job type', async function () {
+      await makeGetRequest({
+        url: server.url,
+        token: server.accessToken,
+        path,
+        query: {
+          jobType: 'toto'
+        }
+      })
+    })
+
     it('Should fail with a bad start pagination', async function () {
       await checkBadStartPagination(server.url, path, server.accessToken)
     })
@@ -79,6 +88,7 @@ describe('Test jobs API validators', function () {
         statusCodeExpected: 403
       })
     })
+
   })
 
   after(async function () {

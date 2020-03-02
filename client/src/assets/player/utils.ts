@@ -51,6 +51,9 @@ function buildVideoLink (options: {
     : window.location.origin + window.location.pathname.replace('/embed/', '/watch/')
 
   const params = new URLSearchParams(window.location.search)
+  // Remove these unused parameters when we are on a playlist page
+  params.delete('videoId')
+  params.delete('resume')
 
   if (options.startTime) {
     const startTimeInt = Math.floor(options.startTime)
@@ -122,7 +125,7 @@ function secondsToTime (seconds: number, full = false, symbol?: string) {
 
 function buildVideoEmbed (embedUrl: string) {
   return '<iframe width="560" height="315" ' +
-    'sandbox="allow-same-origin allow-scripts" ' +
+    'sandbox="allow-same-origin allow-scripts allow-popups" ' +
     'src="' + embedUrl + '" ' +
     'frameborder="0" allowfullscreen>' +
     '</iframe>'

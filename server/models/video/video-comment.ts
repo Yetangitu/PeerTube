@@ -1,12 +1,12 @@
 import { AllowNull, BelongsTo, Column, CreatedAt, DataType, ForeignKey, Is, Model, Scopes, Table, UpdatedAt } from 'sequelize-typescript'
-import { ActivityTagObject } from '../../../shared/models/activitypub/objects/common-objects'
+import { ActivityTagObject, ActivityTombstoneObject } from '../../../shared/models/activitypub/objects/common-objects'
 import { VideoCommentObject } from '../../../shared/models/activitypub/objects/video-comment-object'
 import { VideoComment } from '../../../shared/models/videos/video-comment.model'
 import { isActivityPubUrlValid } from '../../helpers/custom-validators/activitypub/misc'
 import { CONSTRAINTS_FIELDS, WEBSERVER } from '../../initializers/constants'
 import { AccountModel } from '../account/account'
 import { ActorModel } from '../activitypub/actor'
-import { buildBlockedAccountSQL, buildLocalAccountIdsIn, getSort, throwIfNotValid } from '../utils'
+import { buildBlockedAccountSQL, buildLocalAccountIdsIn, getCommentSort, throwIfNotValid } from '../utils'
 import { VideoModel } from './video'
 import { VideoChannelModel } from './video-channel'
 import { getServerActor } from '../../helpers/utils'
@@ -56,6 +56,19 @@ enum ScopeNames {
               ')'
             ),
             'totalReplies'
+          ],
+          [
+            Sequelize.literal(
+              '(' +
+                'SELECT COUNT("replies"."id") ' +
+                'FROM "videoComment" AS "replies" ' +
+                'INNER JOIN "video" ON "video"."id" = "replies"."videoId" ' +
+                'INNER JOIN "videoChannel" ON "videoChannel"."id" = "video"."channelId" ' +
+                'WHERE "replies"."originCommentId" = "VideoCommentModel"."id" ' +
+                'AND "replies"."accountId" = "videoChannel"."accountId"' +
+              ')'
+            ),
+            'totalRepliesFromVideoAuthor'
           ]
         ]
       }
@@ -122,6 +135,10 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
   @UpdatedAt
   updatedAt: Date
 
+  @AllowNull(true)
+  @Column(DataType.DATE)
+  deletedAt: Date
+
   @AllowNull(false)
   @Is('VideoCommentUrl', value => throwIfNotValid(value, isActivityPubUrlValid, 'url'))
   @Column(DataType.STRING(CONSTRAINTS_FIELDS.VIDEOS.URL.max))
@@ -177,7 +194,7 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
 
   @BelongsTo(() => AccountModel, {
     foreignKey: {
-      allowNull: false
+      allowNull: true
     },
     onDelete: 'CASCADE'
   })
@@ -240,10 +257,10 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
   }
 
   static async listThreadsForApi (parameters: {
-    videoId: number,
-    start: number,
-    count: number,
-    sort: string,
+    videoId: number
+    start: number
+    count: number
+    sort: string
     user?: MUserAccountId
   }) {
     const { videoId, start, count, sort, user } = parameters
@@ -255,7 +272,7 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
     const query = {
       offset: start,
       limit: count,
-      order: getSort(sort),
+      order: getCommentSort(sort),
       where: {
         videoId,
         inReplyToCommentId: null,
@@ -283,8 +300,8 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
   }
 
   static async listThreadCommentsForApi (parameters: {
-    videoId: number,
-    threadId: number,
+    videoId: number
+    threadId: number
     user?: MUserAccountId
   }) {
     const { videoId, threadId, user } = parameters
@@ -297,7 +314,7 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
       order: [ [ 'createdAt', 'ASC' ], [ 'updatedAt', 'ASC' ] ] as Order,
       where: {
         videoId,
-        [ Op.or ]: [
+        [Op.or]: [
           { id: threadId },
           { originCommentId: threadId }
         ],
@@ -329,7 +346,7 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
       order: [ [ 'createdAt', order ] ] as Order,
       where: {
         id: {
-          [ Op.in ]: Sequelize.literal('(' +
+          [Op.in]: Sequelize.literal('(' +
             'WITH RECURSIVE children (id, "inReplyToCommentId") AS ( ' +
               `SELECT id, "inReplyToCommentId" FROM "videoComment" WHERE id = ${comment.id} ` +
               'UNION ' +
@@ -338,7 +355,7 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
             ') ' +
             'SELECT id FROM children' +
           ')'),
-          [ Op.ne ]: comment.id
+          [Op.ne]: comment.id
         }
       },
       transaction: t
@@ -436,7 +453,15 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
   }
 
   isOwned () {
+    if (!this.Account) {
+      return false
+    }
+
     return this.Account.isOwned()
+  }
+
+  isDeleted () {
+    return this.deletedAt !== null
   }
 
   extractMentions () {
@@ -487,12 +512,15 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
       videoId: this.videoId,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
+      deletedAt: this.deletedAt,
+      isDeleted: this.isDeleted(),
+      totalRepliesFromVideoAuthor: this.get('totalRepliesFromVideoAuthor') || 0,
       totalReplies: this.get('totalReplies') || 0,
-      account: this.Account.toFormattedJSON()
+      account: this.Account ? this.Account.toFormattedJSON() : null
     } as VideoComment
   }
 
-  toActivityPubObject (this: MCommentAP, threadParentComments: MCommentOwner[]): VideoCommentObject {
+  toActivityPubObject (this: MCommentAP, threadParentComments: MCommentOwner[]): VideoCommentObject | ActivityTombstoneObject {
     let inReplyTo: string
     // New thread, so in AS we reply to the video
     if (this.inReplyToCommentId === null) {
@@ -501,8 +529,22 @@ export class VideoCommentModel extends Model<VideoCommentModel> {
       inReplyTo = this.InReplyToVideoComment.url
     }
 
+    if (this.isDeleted()) {
+      return {
+        id: this.url,
+        type: 'Tombstone',
+        formerType: 'Note',
+        inReplyTo,
+        published: this.createdAt.toISOString(),
+        updated: this.updatedAt.toISOString(),
+        deleted: this.deletedAt.toISOString()
+      }
+    }
+
     const tag: ActivityTagObject[] = []
     for (const parentComment of threadParentComments) {
+      if (!parentComment.Account) continue
+
       const actor = parentComment.Account.Actor
 
       tag.push({

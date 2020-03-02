@@ -4,10 +4,11 @@ import { Injectable } from '@angular/core'
 import { SortMeta } from 'primeng/api'
 import { Observable } from 'rxjs'
 import { ResultList } from '../../../../../../shared'
-import { JobState } from '../../../../../../shared/models'
 import { Job } from '../../../../../../shared/models/server/job.model'
 import { environment } from '../../../../environments/environment'
 import { RestExtractor, RestPagination, RestService } from '../../../shared'
+import { JobStateClient } from '../../../../types/job-state-client.type'
+import { JobTypeClient } from '../../../../types/job-type-client.type'
 
 @Injectable()
 export class JobService {
@@ -19,11 +20,13 @@ export class JobService {
     private restExtractor: RestExtractor
   ) {}
 
-  getJobs (state: JobState, pagination: RestPagination, sort: SortMeta): Observable<ResultList<Job>> {
+  getJobs (jobState: JobStateClient, jobType: JobTypeClient, pagination: RestPagination, sort: SortMeta): Observable<ResultList<Job>> {
     let params = new HttpParams()
     params = this.restService.addRestGetParams(params, pagination, sort)
 
-    return this.authHttp.get<ResultList<Job>>(JobService.BASE_JOB_URL + '/' + state, { params })
+    if (jobType !== 'all') params = params.append('jobType', jobType)
+
+    return this.authHttp.get<ResultList<Job>>(JobService.BASE_JOB_URL + '/' + jobState, { params })
                .pipe(
                  map(res => {
                    return this.restExtractor.convertResultListDateToHuman(res, [ 'createdAt', 'processedOn', 'finishedOn' ])

@@ -1,18 +1,18 @@
-import { Component, ElementRef, Input, OnChanges, OnDestroy, OnInit, SimpleChanges, ViewChild } from '@angular/core'
+import { Component, ElementRef, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core'
 import { ActivatedRoute } from '@angular/router'
 import { ConfirmService, Notifier } from '@app/core'
 import { Subject, Subscription } from 'rxjs'
-import { VideoCommentThreadTree } from '../../../../../../shared/models/videos/video-comment.model'
 import { AuthService } from '../../../core/auth'
 import { ComponentPagination, hasMoreItems } from '../../../shared/rest/component-pagination.model'
 import { User } from '../../../shared/users'
-import { VideoSortField } from '../../../shared/video/sort-field.type'
+import { CommentSortField } from '../../../shared/video/sort-field.type'
 import { VideoDetails } from '../../../shared/video/video-details.model'
 import { VideoComment } from './video-comment.model'
 import { VideoCommentService } from './video-comment.service'
 import { I18n } from '@ngx-translate/i18n-polyfill'
 import { Syndication } from '@app/shared/video/syndication.model'
 import { HooksService } from '@app/core/plugins/hooks.service'
+import { VideoCommentThreadTree } from '@app/videos/+video-watch/comment/video-comment-thread-tree.model'
 
 @Component({
   selector: 'my-video-comments',
@@ -20,13 +20,15 @@ import { HooksService } from '@app/core/plugins/hooks.service'
   styleUrls: ['./video-comments.component.scss']
 })
 export class VideoCommentsComponent implements OnInit, OnChanges, OnDestroy {
-  @ViewChild('commentHighlightBlock', { static: false }) commentHighlightBlock: ElementRef
+  @ViewChild('commentHighlightBlock') commentHighlightBlock: ElementRef
   @Input() video: VideoDetails
   @Input() user: User
 
+  @Output() timestampClicked = new EventEmitter<number>()
+
   comments: VideoComment[] = []
   highlightedThread: VideoComment
-  sort: VideoSortField = '-createdAt'
+  sort: CommentSortField = '-createdAt'
   componentPagination: ComponentPagination = {
     currentPage: 1,
     itemsPerPage: 10,
@@ -150,12 +152,19 @@ export class VideoCommentsComponent implements OnInit, OnChanges, OnDestroy {
     this.viewReplies(commentTree.comment.id)
   }
 
+  handleSortChange (sort: CommentSortField) {
+    if (this.sort === sort) return
+
+    this.sort = sort
+    this.resetVideo()
+  }
+
+  handleTimestampClicked (timestamp: number) {
+    this.timestampClicked.emit(timestamp)
+  }
+
   async onWantedToDelete (commentToDelete: VideoComment) {
     let message = 'Do you really want to delete this comment?'
-
-    if (commentToDelete.totalReplies !== 0) {
-      message += this.i18n(' {{totalReplies}} replies will be deleted too.', { totalReplies: commentToDelete.totalReplies })
-    }
 
     if (commentToDelete.isLocal) {
       message += this.i18n(' The deletion will be sent to remote instances, so they remove the comment too.')
@@ -169,21 +178,8 @@ export class VideoCommentsComponent implements OnInit, OnChanges, OnDestroy {
     this.videoCommentService.deleteVideoComment(commentToDelete.videoId, commentToDelete.id)
       .subscribe(
         () => {
-          // Delete the comment in the tree
-          if (commentToDelete.inReplyToCommentId) {
-            const thread = this.threadComments[commentToDelete.threadId]
-            if (!thread) {
-              console.error(`Cannot find thread ${commentToDelete.threadId} of the comment to delete ${commentToDelete.id}`)
-              return
-            }
-
-            this.deleteLocalCommentThread(thread, commentToDelete)
-            return
-          }
-
-          // Delete the thread
-          this.comments = this.comments.filter(c => c.id !== commentToDelete.id)
-          this.componentPagination.totalItems--
+          // Mark the comment as deleted
+          this.softDeleteComment(commentToDelete)
 
           if (this.highlightedThread.id === commentToDelete.id) this.highlightedThread = undefined
         },
@@ -204,15 +200,11 @@ export class VideoCommentsComponent implements OnInit, OnChanges, OnDestroy {
     }
   }
 
-  private deleteLocalCommentThread (parentComment: VideoCommentThreadTree, commentToDelete: VideoComment) {
-    for (const commentChild of parentComment.children) {
-      if (commentChild.comment.id === commentToDelete.id) {
-        parentComment.children = parentComment.children.filter(c => c.comment.id !== commentToDelete.id)
-        return
-      }
-
-      this.deleteLocalCommentThread(commentChild, commentToDelete)
-    }
+  private softDeleteComment (comment: VideoComment) {
+    comment.isDeleted = true
+    comment.deletedAt = new Date()
+    comment.text = ''
+    comment.account = null
   }
 
   private resetVideo () {

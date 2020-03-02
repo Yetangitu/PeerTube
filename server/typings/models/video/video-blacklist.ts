@@ -1,6 +1,6 @@
 import { VideoBlacklistModel } from '../../../models/video/video-blacklist'
 import { PickWith } from '@server/typings/utils'
-import { MVideo, MVideoFormattable } from '@server/typings/models'
+import { MVideo, MVideoFormattable } from './video'
 
 type Use<K extends keyof VideoBlacklistModel, M> = PickWith<VideoBlacklistModel, K, M>
 
@@ -13,15 +13,18 @@ export type MVideoBlacklistUnfederated = Pick<MVideoBlacklist, 'unfederated'>
 
 // ############################################################################
 
-export type MVideoBlacklistLightVideo = MVideoBlacklistLight &
+export type MVideoBlacklistLightVideo =
+  MVideoBlacklistLight &
   Use<'Video', MVideo>
 
-export type MVideoBlacklistVideo = MVideoBlacklist &
+export type MVideoBlacklistVideo =
+  MVideoBlacklist &
   Use<'Video', MVideo>
 
 // ############################################################################
 
 // Format for API or AP object
 
-export type MVideoBlacklistFormattable = MVideoBlacklist &
+export type MVideoBlacklistFormattable =
+  MVideoBlacklist &
   Use<'Video', MVideoFormattable>

@@ -1,6 +1,6 @@
 import * as ffmpeg from 'fluent-ffmpeg'
 import { dirname, join } from 'path'
-import { getTargetBitrate, getMaxBitrate, VideoResolution } from '../../shared/models/videos'
+import { getMaxBitrate, getTargetBitrate, VideoResolution } from '../../shared/models/videos'
 import { FFMPEG_NICE, VIDEO_TRANSCODING_FPS } from '../initializers/constants'
 import { processImage } from './image-utils'
 import { logger } from './logger'
@@ -8,12 +8,78 @@ import { checkFFmpegEncoders } from '../initializers/checker-before-init'
 import { readFile, remove, writeFile } from 'fs-extra'
 import { CONFIG } from '../initializers/config'
 
+/**
+ * A toolbox to play with audio
+ */
+namespace audio {
+  export const get = (videoPath: string) => {
+    // without position, ffprobe considers the last input only
+    // we make it consider the first input only
+    // if you pass a file path to pos, then ffprobe acts on that file directly
+    return new Promise<{ absolutePath: string, audioStream?: any }>((res, rej) => {
+
+      function parseFfprobe (err: any, data: ffmpeg.FfprobeData) {
+        if (err) return rej(err)
+
+        if ('streams' in data) {
+          const audioStream = data.streams.find(stream => stream['codec_type'] === 'audio')
+          if (audioStream) {
+            return res({
+              absolutePath: data.format.filename,
+              audioStream
+            })
+          }
+        }
+
+        return res({ absolutePath: data.format.filename })
+      }
+
+      return ffmpeg.ffprobe(videoPath, parseFfprobe)
+    })
+  }
+
+  export namespace bitrate {
+    const baseKbitrate = 384
+
+    const toBits = (kbits: number) => kbits * 8000
+
+    export const aac = (bitrate: number): number => {
+      switch (true) {
+        case bitrate > toBits(baseKbitrate):
+          return baseKbitrate
+
+        default:
+          return -1 // we interpret it as a signal to copy the audio stream as is
+      }
+    }
+
+    export const mp3 = (bitrate: number): number => {
+      /*
+      a 192kbit/sec mp3 doesn't hold as much information as a 192kbit/sec aac.
+      That's why, when using aac, we can go to lower kbit/sec. The equivalences
+      made here are not made to be accurate, especially with good mp3 encoders.
+      */
+      switch (true) {
+        case bitrate <= toBits(192):
+          return 128
+
+        case bitrate <= toBits(384):
+          return 256
+
+        default:
+          return baseKbitrate
+      }
+    }
+  }
+}
+
 function computeResolutionsToTranscode (videoFileHeight: number) {
   const resolutionsEnabled: number[] = []
   const configResolutions = CONFIG.TRANSCODING.RESOLUTIONS
 
   // Put in the order we want to proceed jobs
   const resolutions = [
+    VideoResolution.H_NOVIDEO,
     VideoResolution.H_480P,
     VideoResolution.H_360P,
     VideoResolution.H_720P,
@@ -23,7 +89,7 @@ function computeResolutionsToTranscode (videoFileHeight: number) {
   ]
 
   for (const resolution of resolutions) {
-    if (configResolutions[ resolution + 'p' ] === true && videoFileHeight > resolution) {
+    if (configResolutions[resolution + 'p'] === true && videoFileHeight > resolution) {
       resolutionsEnabled.push(resolution)
     }
   }
@@ -31,17 +97,53 @@ function computeResolutionsToTranscode (videoFileHeight: number) {
   return resolutionsEnabled
 }
 
-async function getVideoFileSize (path: string) {
+async function getVideoStreamSize (path: string) {
   const videoStream = await getVideoStreamFromFile(path)
 
-  return {
-    width: videoStream.width,
-    height: videoStream.height
+  return videoStream === null
+    ? { width: 0, height: 0 }
+    : { width: videoStream.width, height: videoStream.height }
+}
+
+async function getVideoStreamCodec (path: string) {
+  const videoStream = await getVideoStreamFromFile(path)
+
+  if (!videoStream) return ''
+
+  const videoCodec = videoStream.codec_tag_string
+
+  const baseProfileMatrix = {
+    High: '6400',
+    Main: '4D40',
+    Baseline: '42E0'
   }
+
+  let baseProfile = baseProfileMatrix[videoStream.profile]
+  if (!baseProfile) {
+    logger.warn('Cannot get video profile codec of %s.', path, { videoStream })
+    baseProfile = baseProfileMatrix['High'] // Fallback
+  }
+
+  const level = videoStream.level.toString(16)
+
+  return `${videoCodec}.${baseProfile}${level}`
+}
+
+async function getAudioStreamCodec (path: string) {
+  const { audioStream } = await audio.get(path)
+
+  if (!audioStream) return ''
+
+  const audioCodec = audioStream.codec_name
+  if (audioCodec === 'aac') return 'mp4a.40.2'
+
+  logger.warn('Cannot get audio codec of %s.', path, { audioStream })
+
+  return 'mp4a.40.2' // Fallback
 }
 
 async function getVideoFileResolution (path: string) {
-  const size = await getVideoFileSize(path)
+  const size = await getVideoStreamSize(path)
 
   return {
     videoFileResolution: Math.min(size.height, size.width),
@@ -51,6 +153,7 @@ async function getVideoFileResolution (path: string) {
 
 async function getVideoFileFPS (path: string) {
   const videoStream = await getVideoStreamFromFile(path)
+  if (videoStream === null) return 0
 
   for (const key of [ 'avg_frame_rate', 'r_frame_rate' ]) {
     const valuesText: string = videoStream[key]
@@ -118,7 +221,7 @@ async function generateImageFromVideoFile (fromPath: string, folder: string, ima
   }
 }
 
-type TranscodeOptionsType = 'hls' | 'quick-transcode' | 'video' | 'merge-audio'
+type TranscodeOptionsType = 'hls' | 'quick-transcode' | 'video' | 'merge-audio' | 'only-audio'
 
 interface BaseTranscodeOptions {
   type: TranscodeOptionsType
@@ -130,6 +233,7 @@ interface BaseTranscodeOptions {
 
 interface HLSTranscodeOptions extends BaseTranscodeOptions {
   type: 'hls'
+  copyCodecs: boolean
   hlsPlaylist: {
     videoFilename: string
   }
@@ -148,7 +252,16 @@ interface MergeAudioTranscodeOptions extends BaseTranscodeOptions {
   audioPath: string
 }
 
-type TranscodeOptions = HLSTranscodeOptions | VideoTranscodeOptions | MergeAudioTranscodeOptions | QuickTranscodeOptions
+interface OnlyAudioTranscodeOptions extends BaseTranscodeOptions {
+  type: 'only-audio'
+}
+
+type TranscodeOptions =
+  HLSTranscodeOptions
+  | VideoTranscodeOptions
+  | MergeAudioTranscodeOptions
+  | OnlyAudioTranscodeOptions
+  | QuickTranscodeOptions
 
 function transcode (options: TranscodeOptions) {
   return new Promise<void>(async (res, rej) => {
@@ -157,11 +270,13 @@ function transcode (options: TranscodeOptions) {
         .output(options.outputPath)
 
       if (options.type === 'quick-transcode') {
-        command = await buildQuickTranscodeCommand(command)
+        command = buildQuickTranscodeCommand(command)
       } else if (options.type === 'hls') {
         command = await buildHLSCommand(command, options)
       } else if (options.type === 'merge-audio') {
         command = await buildAudioMergeCommand(command, options)
+      } else if (options.type === 'only-audio') {
+        command = buildOnlyAudioCommand(command, options)
       } else {
         command = await buildx264Command(command, options)
       }
@@ -197,26 +312,34 @@ async function canDoQuickTranscode (path: string): Promise<boolean> {
   const resolution = await getVideoFileResolution(path)
 
   // check video params
-  if (videoStream[ 'codec_name' ] !== 'h264') return false
-  if (videoStream[ 'pix_fmt' ] !== 'yuv420p') return false
+  if (videoStream == null) return false
+  if (videoStream['codec_name'] !== 'h264') return false
+  if (videoStream['pix_fmt'] !== 'yuv420p') return false
   if (fps < VIDEO_TRANSCODING_FPS.MIN || fps > VIDEO_TRANSCODING_FPS.MAX) return false
   if (bitRate > getMaxBitrate(resolution.videoFileResolution, fps, VIDEO_TRANSCODING_FPS)) return false
 
-    // check audio params (if audio stream exists)
+  // check audio params (if audio stream exists)
   if (parsedAudio.audioStream) {
-    if (parsedAudio.audioStream[ 'codec_name' ] !== 'aac') return false
+    if (parsedAudio.audioStream['codec_name'] !== 'aac') return false
 
-    const maxAudioBitrate = audio.bitrate[ 'aac' ](parsedAudio.audioStream[ 'bit_rate' ])
-    if (maxAudioBitrate !== -1 && parsedAudio.audioStream[ 'bit_rate' ] > maxAudioBitrate) return false
+    const maxAudioBitrate = audio.bitrate['aac'](parsedAudio.audioStream['bit_rate'])
+    if (maxAudioBitrate !== -1 && parsedAudio.audioStream['bit_rate'] > maxAudioBitrate) return false
   }
 
   return true
 }
 
+function getClosestFramerateStandard (fps: number, type: 'HD_STANDARD' | 'STANDARD'): number {
+  return VIDEO_TRANSCODING_FPS[type].slice(0)
+                                    .sort((a, b) => fps % a - fps % b)[0]
+}
+
 // ---------------------------------------------------------------------------
 
 export {
-  getVideoFileSize,
+  getVideoStreamCodec,
+  getAudioStreamCodec,
+  getVideoStreamSize,
   getVideoFileResolution,
   getDurationFromVideoFile,
   generateImageFromVideoFile,
@@ -232,15 +355,16 @@ export {
 
 // ---------------------------------------------------------------------------
 
-async function buildx264Command (command: ffmpeg.FfmpegCommand, options: VideoTranscodeOptions) {
+async function buildx264Command (command: ffmpeg.FfmpegCommand, options: TranscodeOptions) {
   let fps = await getVideoFileFPS(options.inputPath)
-  // On small/medium resolutions, limit FPS
   if (
+    // On small/medium resolutions, limit FPS
     options.resolution !== undefined &&
     options.resolution < VIDEO_TRANSCODING_FPS.KEEP_ORIGIN_FPS_RESOLUTION_MIN &&
     fps > VIDEO_TRANSCODING_FPS.AVERAGE
   ) {
-    fps = VIDEO_TRANSCODING_FPS.AVERAGE
+    // Get closest standard framerate by modulo: downsampling has to be done to a divisor of the nominal fps value
+    fps = getClosestFramerateStandard(fps, 'STANDARD')
   }
 
   command = await presetH264(command, options.inputPath, options.resolution, fps)
@@ -253,7 +377,7 @@ async function buildx264Command (command: ffmpeg.FfmpegCommand, options: VideoTr
 
   if (fps) {
     // Hard FPS limits
-    if (fps > VIDEO_TRANSCODING_FPS.MAX) fps = VIDEO_TRANSCODING_FPS.MAX
+    if (fps > VIDEO_TRANSCODING_FPS.MAX) fps = getClosestFramerateStandard(fps, 'HD_STANDARD')
     else if (fps < VIDEO_TRANSCODING_FPS.MIN) fps = VIDEO_TRANSCODING_FPS.MIN
 
     command = command.withFPS(fps)
@@ -275,8 +399,14 @@ async function buildAudioMergeCommand (command: ffmpeg.FfmpegCommand, options: M
   return command
 }
 
-async function buildQuickTranscodeCommand (command: ffmpeg.FfmpegCommand) {
-  command = await presetCopy(command)
+function buildOnlyAudioCommand (command: ffmpeg.FfmpegCommand, options: OnlyAudioTranscodeOptions) {
+  command = presetOnlyAudio(command)
+
+  return command
+}
+
+function buildQuickTranscodeCommand (command: ffmpeg.FfmpegCommand) {
+  command = presetCopy(command)
 
   command = command.outputOption('-map_metadata -1') // strip all metadata
                    .outputOption('-movflags faststart')
@@ -287,7 +417,8 @@ async function buildQuickTranscodeCommand (command: ffmpeg.FfmpegCommand) {
 async function buildHLSCommand (command: ffmpeg.FfmpegCommand, options: HLSTranscodeOptions) {
   const videoPath = getHLSVideoPath(options)
 
-  command = await presetCopy(command)
+  if (options.copyCodecs) command = presetCopy(command)
+  else command = await buildx264Command(command, options)
 
   command = command.outputOption('-hls_time 4')
                    .outputOption('-hls_list_size 0')
@@ -325,9 +456,7 @@ function getVideoStreamFromFile (path: string) {
       if (err) return rej(err)
 
       const videoStream = metadata.streams.find(s => s.codec_type === 'video')
-      if (!videoStream) return rej(new Error('Cannot find video stream of ' + path))
-
-      return res(videoStream)
+      return res(videoStream || null)
     })
   })
 }
@@ -356,71 +485,6 @@ async function presetH264VeryFast (command: ffmpeg.FfmpegCommand, input: string,
 }
 
 /**
- * A toolbox to play with audio
- */
-namespace audio {
-  export const get = (option: string) => {
-    // without position, ffprobe considers the last input only
-    // we make it consider the first input only
-    // if you pass a file path to pos, then ffprobe acts on that file directly
-    return new Promise<{ absolutePath: string, audioStream?: any }>((res, rej) => {
-
-      function parseFfprobe (err: any, data: ffmpeg.FfprobeData) {
-        if (err) return rej(err)
-
-        if ('streams' in data) {
-          const audioStream = data.streams.find(stream => stream['codec_type'] === 'audio')
-          if (audioStream) {
-            return res({
-              absolutePath: data.format.filename,
-              audioStream
-            })
-          }
-        }
-
-        return res({ absolutePath: data.format.filename })
-      }
-
-      return ffmpeg.ffprobe(option, parseFfprobe)
-    })
-  }
-
-  export namespace bitrate {
-    const baseKbitrate = 384
-
-    const toBits = (kbits: number) => kbits * 8000
-
-    export const aac = (bitrate: number): number => {
-      switch (true) {
-        case bitrate > toBits(baseKbitrate):
-          return baseKbitrate
-
-        default:
-          return -1 // we interpret it as a signal to copy the audio stream as is
-      }
-    }
-
-    export const mp3 = (bitrate: number): number => {
-      /*
-      a 192kbit/sec mp3 doesn't hold as much information as a 192kbit/sec aac.
-      That's why, when using aac, we can go to lower kbit/sec. The equivalences
-      made here are not made to be accurate, especially with good mp3 encoders.
-      */
-      switch (true) {
-        case bitrate <= toBits(192):
-          return 128
-
-        case bitrate <= toBits(384):
-          return 256
-
-        default:
-          return baseKbitrate
-      }
-    }
-  }
-}
-
-/**
  * Standard profile, with variable bitrate audio and faststart.
  *
  * As for the audio, quality '5' is the highest and ensures 96-112kbps/channel
@@ -430,8 +494,8 @@ async function presetH264 (command: ffmpeg.FfmpegCommand, input: string, resolut
   let localCommand = command
     .format('mp4')
     .videoCodec('libx264')
-    .outputOption('-level 3.1') // 3.1 is the minimal ressource allocation for our highest supported resolution
-    .outputOption('-b_strategy 1') // NOTE: b-strategy 1 - heuristic algorythm, 16 is optimal B-frames for it
+    .outputOption('-level 3.1') // 3.1 is the minimal resource allocation for our highest supported resolution
+    .outputOption('-b_strategy 1') // NOTE: b-strategy 1 - heuristic algorithm, 16 is optimal B-frames for it
     .outputOption('-bf 16') // NOTE: Why 16: https://github.com/Chocobozzz/PeerTube/pull/774. b-strategy 2 -> B-frames<16
     .outputOption('-pix_fmt yuv420p') // allows import of source material with incompatible pixel formats (e.g. MJPEG video)
     .outputOption('-map_metadata -1') // strip all metadata
@@ -450,10 +514,10 @@ async function presetH264 (command: ffmpeg.FfmpegCommand, input: string, resolut
     // of course this is far from perfect, but it might save some space in the end
     localCommand = localCommand.audioCodec('aac')
 
-    const audioCodecName = parsedAudio.audioStream[ 'codec_name' ]
+    const audioCodecName = parsedAudio.audioStream['codec_name']
 
-    if (audio.bitrate[ audioCodecName ]) {
-      const bitrate = audio.bitrate[ audioCodecName ](parsedAudio.audioStream[ 'bit_rate' ])
+    if (audio.bitrate[audioCodecName]) {
+      const bitrate = audio.bitrate[audioCodecName](parsedAudio.audioStream['bit_rate'])
       if (bitrate !== undefined && bitrate !== -1) localCommand = localCommand.audioBitrate(bitrate)
     }
   }
@@ -474,9 +538,16 @@ async function presetH264 (command: ffmpeg.FfmpegCommand, input: string, resolut
   return localCommand
 }
 
-async function presetCopy (command: ffmpeg.FfmpegCommand): Promise<ffmpeg.FfmpegCommand> {
+function presetCopy (command: ffmpeg.FfmpegCommand): ffmpeg.FfmpegCommand {
   return command
     .format('mp4')
     .videoCodec('copy')
     .audioCodec('copy')
+}
+
+function presetOnlyAudio (command: ffmpeg.FfmpegCommand): ffmpeg.FfmpegCommand {
+  return command
+    .format('mp4')
+    .audioCodec('copy')
+    .noVideo()
 }

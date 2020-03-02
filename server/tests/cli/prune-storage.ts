@@ -1,4 +1,4 @@
-/* tslint:disable:no-unused-expression */
+/* eslint-disable @typescript-eslint/no-unused-expressions,@typescript-eslint/require-await */
 
 import 'mocha'
 import * as chai from 'chai'
@@ -12,17 +12,18 @@ import {
   flushAndRunMultipleServers,
   getAccount,
   getEnvCli,
+  makeGetRequest,
   ServerInfo,
-  setAccessTokensToServers, setDefaultVideoChannel,
+  setAccessTokensToServers,
+  setDefaultVideoChannel,
   updateMyAvatar,
   uploadVideo,
   wait
 } from '../../../shared/extra-utils'
 import { Account, VideoPlaylistPrivacy } from '../../../shared/models'
 import { createFile, readdir } from 'fs-extra'
-import * as uuidv4 from 'uuid/v4'
+import { v4 as uuidv4 } from 'uuid'
 import { join } from 'path'
-import * as request from 'supertest'
 
 const expect = chai.expect
 
@@ -46,7 +47,7 @@ async function assertCountAreOkay (servers: ServerInfo[]) {
     expect(videosCount).to.equal(8)
 
     const torrentsCount = await countFiles(server.internalServerNumber, 'torrents')
-    expect(torrentsCount).to.equal(8)
+    expect(torrentsCount).to.equal(16)
 
     const previewsCount = await countFiles(server.internalServerNumber, 'previews')
     expect(previewsCount).to.equal(2)
@@ -61,7 +62,7 @@ async function assertCountAreOkay (servers: ServerInfo[]) {
 
 describe('Test prune storage scripts', function () {
   let servers: ServerInfo[]
-  const badNames: { [ directory: string ]: string[] } = {}
+  const badNames: { [directory: string]: string[] } = {}
 
   before(async function () {
     this.timeout(120000)
@@ -92,15 +93,23 @@ describe('Test prune storage scripts', function () {
 
     // Lazy load the remote avatar
     {
-      const res = await getAccount(servers[ 0 ].url, 'root@localhost:' + servers[ 1 ].port)
+      const res = await getAccount(servers[0].url, 'root@localhost:' + servers[1].port)
       const account: Account = res.body
-      await request('http://localhost:' + servers[ 0 ].port).get(account.avatar.path).expect(200)
+      await makeGetRequest({
+        url: servers[0].url,
+        path: account.avatar.path,
+        statusCodeExpected: 200
+      })
     }
 
     {
-      const res = await getAccount(servers[ 1 ].url, 'root@localhost:' + servers[ 0 ].port)
+      const res = await getAccount(servers[1].url, 'root@localhost:' + servers[0].port)
       const account: Account = res.body
-      await request('http://localhost:' + servers[ 1 ].port).get(account.avatar.path).expect(200)
+      await makeGetRequest({
+        url: servers[1].url,
+        path: account.avatar.path,
+        statusCodeExpected: 200
+      })
     }
 
     await wait(1000)

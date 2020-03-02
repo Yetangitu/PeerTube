@@ -1,11 +1,6 @@
-import { Video, VideoDetails, VideoFile } from '../../../shared/models/videos'
+import { Video, VideoDetails } from '../../../shared/models/videos'
 import { VideoModel } from './video'
-import {
-  ActivityPlaylistInfohashesObject,
-  ActivityPlaylistSegmentHashesObject,
-  ActivityUrlObject,
-  VideoTorrentObject
-} from '../../../shared/models/activitypub/objects'
+import { ActivityTagObject, ActivityUrlObject, VideoTorrentObject } from '../../../shared/models/activitypub/objects'
 import { MIMETYPES, WEBSERVER } from '../../initializers/constants'
 import { VideoCaptionModel } from './video-caption'
 import {
@@ -16,19 +11,29 @@ import {
 } from '../../lib/activitypub'
 import { isArray } from '../../helpers/custom-validators/misc'
 import { VideoStreamingPlaylist } from '../../../shared/models/videos/video-streaming-playlist.model'
-import { MStreamingPlaylistRedundanciesOpt, MVideo, MVideoAP, MVideoFormattable, MVideoFormattableDetails } from '../../typings/models'
-import { MStreamingPlaylistRedundancies } from '../../typings/models/video/video-streaming-playlist'
+import {
+  MStreamingPlaylistRedundanciesOpt,
+  MStreamingPlaylistVideo,
+  MVideo,
+  MVideoAP,
+  MVideoFile,
+  MVideoFormattable,
+  MVideoFormattableDetails
+} from '../../typings/models'
 import { MVideoFileRedundanciesOpt } from '../../typings/models/video/video-file'
+import { VideoFile } from '@shared/models/videos/video-file.model'
+import { generateMagnetUri } from '@server/helpers/webtorrent'
 
 export type VideoFormattingJSONOptions = {
   completeDescription?: boolean
   additionalAttributes: {
-    state?: boolean,
-    waitTranscoding?: boolean,
-    scheduledUpdate?: boolean,
+    state?: boolean
+    waitTranscoding?: boolean
+    scheduledUpdate?: boolean
     blacklistInfo?: boolean
   }
 }
+
 function videoModelToFormattedJSON (video: MVideoFormattable, options?: VideoFormattingJSONOptions): Video {
   const userHistory = isArray(video.UserVideoHistories) ? video.UserVideoHistories[0] : undefined
 
@@ -115,7 +120,7 @@ function videoModelToFormattedDetailsJSON (video: MVideoFormattableDetails): Vid
 
   const tags = video.Tags ? video.Tags.map(t => t.name) : []
 
-  const streamingPlaylists = streamingPlaylistsModelToFormattedJSON(video.VideoStreamingPlaylists)
+  const streamingPlaylists = streamingPlaylistsModelToFormattedJSON(video, video.VideoStreamingPlaylists)
 
   const detailsJson = {
     support: video.support,
@@ -138,49 +143,57 @@ function videoModelToFormattedDetailsJSON (video: MVideoFormattableDetails): Vid
   }
 
   // Format and sort video files
-  detailsJson.files = videoFilesModelToFormattedJSON(video, video.VideoFiles)
+  detailsJson.files = videoFilesModelToFormattedJSON(video, baseUrlHttp, baseUrlWs, video.VideoFiles)
 
   return Object.assign(formattedJson, detailsJson)
 }
 
-function streamingPlaylistsModelToFormattedJSON (playlists: MStreamingPlaylistRedundanciesOpt[]): VideoStreamingPlaylist[] {
+function streamingPlaylistsModelToFormattedJSON (video: MVideo, playlists: MStreamingPlaylistRedundanciesOpt[]): VideoStreamingPlaylist[] {
   if (isArray(playlists) === false) return []
+
+  const { baseUrlHttp, baseUrlWs } = video.getBaseUrls()
 
   return playlists
     .map(playlist => {
+      const playlistWithVideo = Object.assign(playlist, { Video: video })
+
       const redundancies = isArray(playlist.RedundancyVideos)
         ? playlist.RedundancyVideos.map(r => ({ baseUrl: r.fileUrl }))
         : []
+
+      const files = videoFilesModelToFormattedJSON(playlistWithVideo, baseUrlHttp, baseUrlWs, playlist.VideoFiles)
 
       return {
         id: playlist.id,
         type: playlist.type,
         playlistUrl: playlist.playlistUrl,
         segmentsSha256Url: playlist.segmentsSha256Url,
-        redundancies
-      } as VideoStreamingPlaylist
+        redundancies,
+        files
+      }
     })
 }
 
-function videoFilesModelToFormattedJSON (video: MVideo, videoFiles: MVideoFileRedundanciesOpt[]): VideoFile[] {
-  const { baseUrlHttp, baseUrlWs } = video.getBaseUrls()
-
+function videoFilesModelToFormattedJSON (
+  model: MVideo | MStreamingPlaylistVideo,
+  baseUrlHttp: string,
+  baseUrlWs: string,
+  videoFiles: MVideoFileRedundanciesOpt[]
+): VideoFile[] {
   return videoFiles
     .map(videoFile => {
-      let resolutionLabel = videoFile.resolution + 'p'
-
       return {
         resolution: {
           id: videoFile.resolution,
-          label: resolutionLabel
+          label: videoFile.resolution + 'p'
         },
-        magnetUri: video.generateMagnetUri(videoFile, baseUrlHttp, baseUrlWs),
+        magnetUri: generateMagnetUri(model, videoFile, baseUrlHttp, baseUrlWs),
         size: videoFile.size,
         fps: videoFile.fps,
-        torrentUrl: video.getTorrentUrl(videoFile, baseUrlHttp),
-        torrentDownloadUrl: video.getTorrentDownloadUrl(videoFile, baseUrlHttp),
-        fileUrl: video.getVideoFileUrl(videoFile, baseUrlHttp),
-        fileDownloadUrl: video.getVideoFileDownloadUrl(videoFile, baseUrlHttp)
+        torrentUrl: model.getTorrentUrl(videoFile, baseUrlHttp),
+        torrentDownloadUrl: model.getTorrentDownloadUrl(videoFile, baseUrlHttp),
+        fileUrl: model.getVideoFileUrl(videoFile, baseUrlHttp),
+        fileDownloadUrl: model.getVideoFileDownloadUrl(videoFile, baseUrlHttp)
       } as VideoFile
     })
     .sort((a, b) => {
@@ -188,6 +201,39 @@ function videoFilesModelToFormattedJSON (video: MVideo, videoFiles: MVideoFileRe
       if (a.resolution.id === b.resolution.id) return 0
       return -1
     })
+}
+
+function addVideoFilesInAPAcc (
+  acc: ActivityUrlObject[] | ActivityTagObject[],
+  model: MVideoAP | MStreamingPlaylistVideo,
+  baseUrlHttp: string,
+  baseUrlWs: string,
+  files: MVideoFile[]
+) {
+  for (const file of files) {
+    acc.push({
+      type: 'Link',
+      mediaType: MIMETYPES.VIDEO.EXT_MIMETYPE[file.extname] as any,
+      href: model.getVideoFileUrl(file, baseUrlHttp),
+      height: file.resolution,
+      size: file.size,
+      fps: file.fps
+    })
+
+    acc.push({
+      type: 'Link',
+      mediaType: 'application/x-bittorrent' as 'application/x-bittorrent',
+      href: model.getTorrentUrl(file, baseUrlHttp),
+      height: file.resolution
+    })
+
+    acc.push({
+      type: 'Link',
+      mediaType: 'application/x-bittorrent;x-scheme-handler/magnet' as 'application/x-bittorrent;x-scheme-handler/magnet',
+      href: generateMagnetUri(model, file, baseUrlHttp, baseUrlWs),
+      height: file.resolution
+    })
+  }
 }
 
 function videoModelToActivityPubObject (video: MVideoAP): VideoTorrentObject {
@@ -223,74 +269,48 @@ function videoModelToActivityPubObject (video: MVideoAP): VideoTorrentObject {
     }
   }
 
-  const url: ActivityUrlObject[] = []
-  for (const file of video.VideoFiles) {
-    url.push({
+  const url: ActivityUrlObject[] = [
+    // HTML url should be the first element in the array so Mastodon correctly displays the embed
+    {
       type: 'Link',
-      mimeType: MIMETYPES.VIDEO.EXT_MIMETYPE[ file.extname ] as any,
-      mediaType: MIMETYPES.VIDEO.EXT_MIMETYPE[ file.extname ] as any,
-      href: video.getVideoFileUrl(file, baseUrlHttp),
-      height: file.resolution,
-      size: file.size,
-      fps: file.fps
-    })
+      mediaType: 'text/html',
+      href: WEBSERVER.URL + '/videos/watch/' + video.uuid
+    }
+  ]
 
-    url.push({
-      type: 'Link',
-      mimeType: 'application/x-bittorrent' as 'application/x-bittorrent',
-      mediaType: 'application/x-bittorrent' as 'application/x-bittorrent',
-      href: video.getTorrentUrl(file, baseUrlHttp),
-      height: file.resolution
-    })
-
-    url.push({
-      type: 'Link',
-      mimeType: 'application/x-bittorrent;x-scheme-handler/magnet' as 'application/x-bittorrent;x-scheme-handler/magnet',
-      mediaType: 'application/x-bittorrent;x-scheme-handler/magnet' as 'application/x-bittorrent;x-scheme-handler/magnet',
-      href: video.generateMagnetUri(file, baseUrlHttp, baseUrlWs),
-      height: file.resolution
-    })
-  }
+  addVideoFilesInAPAcc(url, video, baseUrlHttp, baseUrlWs, video.VideoFiles || [])
 
   for (const playlist of (video.VideoStreamingPlaylists || [])) {
-    let tag: (ActivityPlaylistSegmentHashesObject | ActivityPlaylistInfohashesObject)[]
-
-    tag = playlist.p2pMediaLoaderInfohashes
-                  .map(i => ({ type: 'Infohash' as 'Infohash', name: i }))
+    const tag = playlist.p2pMediaLoaderInfohashes
+                  .map(i => ({ type: 'Infohash' as 'Infohash', name: i })) as ActivityTagObject[]
     tag.push({
       type: 'Link',
       name: 'sha256',
-      mimeType: 'application/json' as 'application/json',
       mediaType: 'application/json' as 'application/json',
       href: playlist.segmentsSha256Url
     })
 
+    const playlistWithVideo = Object.assign(playlist, { Video: video })
+    addVideoFilesInAPAcc(tag, playlistWithVideo, baseUrlHttp, baseUrlWs, playlist.VideoFiles || [])
+
     url.push({
       type: 'Link',
-      mimeType: 'application/x-mpegURL' as 'application/x-mpegURL',
       mediaType: 'application/x-mpegURL' as 'application/x-mpegURL',
       href: playlist.playlistUrl,
       tag
     })
   }
 
-  // Add video url too
-  url.push({
-    type: 'Link',
-    mimeType: 'text/html',
-    mediaType: 'text/html',
-    href: WEBSERVER.URL + '/videos/watch/' + video.uuid
-  })
-
   const subtitleLanguage = []
   for (const caption of video.VideoCaptions) {
     subtitleLanguage.push({
       identifier: caption.language,
-      name: VideoCaptionModel.getLanguageLabel(caption.language)
+      name: VideoCaptionModel.getLanguageLabel(caption.language),
+      url: caption.getFileUrl(video)
     })
   }
 
-  const miniature = video.getMiniature()
+  const icons = [ video.getMiniature(), video.getPreview() ]
 
   return {
     type: 'Video' as 'Video',
@@ -315,13 +335,13 @@ function videoModelToActivityPubObject (video: MVideoAP): VideoTorrentObject {
     content: video.getTruncatedDescription(),
     support: video.support,
     subtitleLanguage,
-    icon: {
+    icon: icons.map(i => ({
       type: 'Image',
-      url: miniature.getFileUrl(),
+      url: i.getFileUrl(video),
       mediaType: 'image/jpeg',
-      width: miniature.width,
-      height: miniature.height
-    },
+      width: i.width,
+      height: i.height
+    })),
     url,
     likes: getVideoLikesActivityPubUrl(video),
     dislikes: getVideoDislikesActivityPubUrl(video),

@@ -1,20 +1,18 @@
-// FIXME: something weird with our path definition in tsconfig and typings
-// @ts-ignore
-import * as videojs from 'video.js'
+import videojs, { VideoJsPlayer } from 'video.js'
 
 import * as WebTorrent from 'webtorrent'
-import { VideoFile } from '../../../../../shared/models/videos/video.model'
 import { renderVideo } from './video-renderer'
-import { LoadedQualityData, PlayerNetworkInfo, VideoJSComponentInterface, WebtorrentPluginOptions } from '../peertube-videojs-typings'
+import { LoadedQualityData, PlayerNetworkInfo, WebtorrentPluginOptions } from '../peertube-videojs-typings'
 import { getRtcConfig, timeToInt, videoFileMaxByResolution, videoFileMinByResolution } from '../utils'
 import { PeertubeChunkStore } from './peertube-chunk-store'
 import {
   getAverageBandwidthInStore,
   getStoredMute,
+  getStoredP2PEnabled,
   getStoredVolume,
-  getStoredWebTorrentEnabled,
   saveAverageBandwidth
 } from '../peertube-player-local-storage'
+import { VideoFile } from '@shared/models'
 
 const CacheChunkStore = require('cache-chunk-store')
 
@@ -24,14 +22,16 @@ type PlayOptions = {
   delay?: number
 }
 
-const Plugin: VideoJSComponentInterface = videojs.getPlugin('plugin')
+const Plugin = videojs.getPlugin('plugin')
+
 class WebTorrentPlugin extends Plugin {
+  readonly videoFiles: VideoFile[]
+
   private readonly playerElement: HTMLVideoElement
 
   private readonly autoplay: boolean = false
   private readonly startTime: number = 0
-  private readonly savePlayerSrcFunction: Function
-  private readonly videoFiles: VideoFile[]
+  private readonly savePlayerSrcFunction: VideoJsPlayer['src']
   private readonly videoDuration: number
   private readonly CONSTANTS = {
     INFO_SCHEDULER: 1000, // Don't change this
@@ -49,7 +49,6 @@ class WebTorrentPlugin extends Plugin {
     dht: false
   })
 
-  private player: any
   private currentVideoFile: VideoFile
   private torrent: WebTorrent.Torrent
 
@@ -70,14 +69,14 @@ class WebTorrentPlugin extends Plugin {
 
   private downloadSpeeds: number[] = []
 
-  constructor (player: videojs.Player, options: WebtorrentPluginOptions) {
-    super(player, options)
+  constructor (player: VideoJsPlayer, options?: WebtorrentPluginOptions) {
+    super(player)
 
     this.startTime = timeToInt(options.startTime)
 
     // Disable auto play on iOS
     this.autoplay = options.autoplay && this.isIOS() === false
-    this.playerRefusedP2P = !getStoredWebTorrentEnabled()
+    this.playerRefusedP2P = !getStoredP2PEnabled()
 
     this.videoFiles = options.videoFiles
     this.videoDuration = options.videoDuration
@@ -147,12 +146,12 @@ class WebTorrentPlugin extends Plugin {
     }
 
     // Do not display error to user because we will have multiple fallback
-    this.disableErrorDisplay()
+    this.disableErrorDisplay();
 
     // Hack to "simulate" src link in video.js >= 6
     // Without this, we can't play the video after pausing it
     // https://github.com/videojs/video.js/blob/master/src/js/player.js#L1633
-    this.player.src = () => true
+    (this.player as any).src = () => true
     const oldPlaybackRate = this.player.playbackRate()
 
     const previousVideoFile = this.currentVideoFile
@@ -181,12 +180,20 @@ class WebTorrentPlugin extends Plugin {
     const currentTime = this.player.currentTime()
     const isPaused = this.player.paused()
 
-    // Remove poster to have black background
-    this.playerElement.poster = ''
-
     // Hide bigPlayButton
     if (!isPaused) {
       this.player.bigPlayButton.hide()
+    }
+
+    // Audio-only (resolutionId === 0) gets special treatment
+    if (resolutionId === 0) {
+      // Audio-only: show poster, do not auto-hide controls
+      this.player.addClass('vjs-playing-audio-only-content')
+      this.player.posterImage.show()
+    } else {
+      // Hide poster to have black background
+      this.player.removeClass('vjs-playing-audio-only-content')
+      this.player.posterImage.hide()
     }
 
     const newVideoFile = this.videoFiles.find(f => f.resolution.id === resolutionId)
@@ -195,6 +202,7 @@ class WebTorrentPlugin extends Plugin {
       delay,
       seek: currentTime + (delay / 1000)
     }
+
     this.updateVideoFile(newVideoFile, options)
   }
 
@@ -220,8 +228,16 @@ class WebTorrentPlugin extends Plugin {
     this.trigger('resolutionChange', { auto: this.autoResolution, resolutionId: this.getCurrentResolutionId() })
   }
 
+  isAutoResolutionPossible () {
+    return this.autoResolutionPossible
+  }
+
   getTorrent () {
     return this.torrent
+  }
+
+  getCurrentVideoFile () {
+    return this.currentVideoFile
   }
 
   private addTorrent (
@@ -316,7 +332,7 @@ class WebTorrentPlugin extends Plugin {
 
     const playPromise = this.player.play()
     if (playPromise !== undefined) {
-      return playPromise.then(done)
+      return playPromise.then(() => done())
                         .catch((err: Error) => {
                           if (err.message.indexOf('The play() request was interrupted by a call to pause()') !== -1) {
                             return
@@ -327,6 +343,7 @@ class WebTorrentPlugin extends Plugin {
                           this.player.posterImage.show()
                           this.player.removeClass('vjs-has-autoplay')
                           this.player.removeClass('vjs-has-big-play-button-clicked')
+                          this.player.removeClass('vjs-playing-audio-only-content')
 
                           return done()
                         })
@@ -408,8 +425,8 @@ class WebTorrentPlugin extends Plugin {
     }
 
     // Proxy first play
-    const oldPlay = this.player.play.bind(this.player)
-    this.player.play = () => {
+    const oldPlay = this.player.play.bind(this.player);
+    (this.player as any).play = () => {
       this.player.addClass('vjs-has-big-play-button-clicked')
       this.player.play = oldPlay
 
@@ -601,7 +618,7 @@ class WebTorrentPlugin extends Plugin {
         video: qualityLevelsPayload
       }
     }
-    this.player.tech_.trigger('loadedqualitydata', payload)
+    this.player.tech(true).trigger('loadedqualitydata', payload)
   }
 
   private buildQualityLabel (file: VideoFile) {
@@ -633,9 +650,9 @@ class WebTorrentPlugin extends Plugin {
       return
     }
 
-    for (let i = 0; i < qualityLevels; i++) {
-      const q = this.player.qualityLevels[i]
-      if (q.height === resolutionId) qualityLevels.selectedIndex = i
+    for (let i = 0; i < qualityLevels.length; i++) {
+      const q = qualityLevels[i]
+      if (q.height === resolutionId) qualityLevels.selectedIndex_ = i
     }
   }
 }

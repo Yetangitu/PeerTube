@@ -4,6 +4,8 @@ import { GlobalIconName } from '@app/shared/images/global-icon.component'
 export type DropdownAction<T> = {
   label?: string
   iconName?: GlobalIconName
+  description?: string
+  title?: string
   handler?: (a: T) => any
   linkBuilder?: (a: T) => (string | number)[]
   isDisplayed?: (a: T) => boolean
@@ -23,7 +25,7 @@ export class ActionDropdownComponent<T> {
   @Input() actions: DropdownAction<T>[] | DropdownAction<T>[][] = []
   @Input() entry: T
 
-  @Input() placement = 'bottom-left'
+  @Input() placement = 'bottom-left auto'
 
   @Input() buttonSize: DropdownButtonSize = 'normal'
   @Input() buttonDirection: DropdownDirection = 'horizontal'
@@ -32,13 +34,17 @@ export class ActionDropdownComponent<T> {
   @Input() label: string
   @Input() theme: DropdownTheme = 'grey'
 
-  getActions () {
-    if (this.actions.length !== 0 && Array.isArray(this.actions[0])) return this.actions
+  getActions (): DropdownAction<T>[][] {
+    if (this.actions.length !== 0 && Array.isArray(this.actions[0])) return this.actions as DropdownAction<T>[][]
 
-    return [ this.actions ]
+    return [ this.actions as DropdownAction<T>[] ]
   }
 
-  areActionsDisplayed (actions: DropdownAction<T>[], entry: T) {
-    return actions.some(a => a.isDisplayed === undefined || a.isDisplayed(entry))
+  areActionsDisplayed (actions: Array<DropdownAction<T> | DropdownAction<T>[]>, entry: T): boolean {
+    return actions.some(a => {
+      if (Array.isArray(a)) return this.areActionsDisplayed(a, entry)
+
+      return a.isDisplayed === undefined || a.isDisplayed(entry)
+    })
   }
 }

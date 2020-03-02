@@ -19,6 +19,7 @@ import { AccountModel } from '../server/models/account/account'
 import { VideoChannelModel } from '../server/models/video/video-channel'
 import { VideoStreamingPlaylistModel } from '../server/models/video/video-streaming-playlist'
 import { initDatabaseModels } from '../server/initializers'
+import { createTorrentAndSetInfoHash } from '@server/helpers/webtorrent'
 
 run()
   .then(() => process.exit(0))
@@ -124,7 +125,7 @@ async function run () {
 
     for (const file of video.VideoFiles) {
       console.log('Updating torrent file %s of video %s.', file.resolution, video.uuid)
-      await video.createTorrentAndSetInfoHash(file)
+      await createTorrentAndSetInfoHash(video, file)
     }
 
     for (const playlist of video.VideoStreamingPlaylists) {

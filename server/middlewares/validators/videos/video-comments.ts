@@ -50,7 +50,7 @@ const addVideoCommentThreadValidator = [
     if (areValidationErrors(req, res)) return
     if (!await doesVideoExist(req.params.videoId, res)) return
     if (!isVideoCommentsEnabled(res.locals.videoAll, res)) return
-    if (!await isVideoCommentAccepted(req, res, res.locals.videoAll,false)) return
+    if (!await isVideoCommentAccepted(req, res, res.locals.videoAll, false)) return
 
     return next()
   }
@@ -134,7 +134,7 @@ async function doesVideoCommentThreadExist (idArg: number | string, video: MVide
 
   if (videoComment.videoId !== video.id) {
     res.status(400)
-      .json({ error: 'Video comment is associated to this video.' })
+      .json({ error: 'Video comment is not associated to this video.' })
       .end()
 
     return false
@@ -166,7 +166,7 @@ async function doesVideoCommentExist (idArg: number | string, video: MVideoId, r
 
   if (videoComment.videoId !== video.id) {
     res.status(400)
-      .json({ error: 'Video comment is associated to this video.' })
+      .json({ error: 'Video comment is not associated to this video.' })
       .end()
 
     return false
@@ -189,6 +189,13 @@ function isVideoCommentsEnabled (video: MVideo, res: express.Response) {
 }
 
 function checkUserCanDeleteVideoComment (user: MUser, videoComment: MCommentOwner, res: express.Response) {
+  if (videoComment.isDeleted()) {
+    res.status(409)
+      .json({ error: 'This comment is already deleted' })
+      .end()
+    return false
+  }
+
   const account = videoComment.Account
   if (user.hasRight(UserRight.REMOVE_ANY_VIDEO_COMMENT) === false && account.userId !== user.id) {
     res.status(403)

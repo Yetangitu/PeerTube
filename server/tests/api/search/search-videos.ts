@@ -1,4 +1,4 @@
-/* tslint:disable:no-unused-expression */
+/* eslint-disable @typescript-eslint/no-unused-expressions,@typescript-eslint/require-await */
 
 import * as chai from 'chai'
 import 'mocha'
@@ -20,6 +20,7 @@ const expect = chai.expect
 describe('Test videos search', function () {
   let server: ServerInfo = null
   let startDate: string
+  let videoUUID: string
 
   before(async function () {
     this.timeout(30000)
@@ -46,6 +47,7 @@ describe('Test videos search', function () {
         const attributes3 = immutableAssign(attributes1, { name: attributes1.name + ' - 3', language: undefined })
         const res = await uploadVideo(server.url, server.accessToken, attributes3)
         const videoId = res.body.video.id
+        videoUUID = res.body.video.uuid
 
         await createVideoCaption({
           url: server.url,
@@ -76,7 +78,7 @@ describe('Test videos search', function () {
       const attributes5 = immutableAssign(attributes1, { name: attributes1.name + ' - 5', licence: 2, language: undefined })
       await uploadVideo(server.url, server.accessToken, attributes5)
 
-      const attributes6 = immutableAssign(attributes1, { name: attributes1.name + ' - 6', tags: [ 't1', 't2 '] })
+      const attributes6 = immutableAssign(attributes1, { name: attributes1.name + ' - 6', tags: [ 't1', 't2' ] })
       await uploadVideo(server.url, server.accessToken, attributes6)
 
       const attributes7 = immutableAssign(attributes1, {
@@ -267,16 +269,16 @@ describe('Test videos search', function () {
     {
       const res = await advancedVideosSearch(server.url, query)
       expect(res.body.total).to.equal(2)
-      expect(res.body.data[ 0 ].name).to.equal('1111 2222 3333 - 3')
-      expect(res.body.data[ 1 ].name).to.equal('1111 2222 3333 - 4')
+      expect(res.body.data[0].name).to.equal('1111 2222 3333 - 3')
+      expect(res.body.data[1].name).to.equal('1111 2222 3333 - 4')
     }
 
     {
       const res = await advancedVideosSearch(server.url, immutableAssign(query, { languageOneOf: [ 'pl', 'en', '_unknown' ] }))
       expect(res.body.total).to.equal(3)
-      expect(res.body.data[ 0 ].name).to.equal('1111 2222 3333 - 3')
-      expect(res.body.data[ 1 ].name).to.equal('1111 2222 3333 - 4')
-      expect(res.body.data[ 2 ].name).to.equal('1111 2222 3333 - 5')
+      expect(res.body.data[0].name).to.equal('1111 2222 3333 - 3')
+      expect(res.body.data[1].name).to.equal('1111 2222 3333 - 4')
+      expect(res.body.data[2].name).to.equal('1111 2222 3333 - 5')
     }
 
     {
@@ -437,6 +439,14 @@ describe('Test videos search', function () {
       expect(res.body.total).to.equal(1)
       expect(res.body.data[0].name).to.equal('1111 2222 3333 - 7')
     }
+  })
+
+  it('Should search by UUID', async function () {
+    const search = videoUUID
+    const res = await advancedVideosSearch(server.url, { search })
+
+    expect(res.body.total).to.equal(1)
+    expect(res.body.data[0].name).to.equal('1111 2222 3333 - 3')
   })
 
   after(async function () {
